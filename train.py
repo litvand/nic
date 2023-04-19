@@ -57,7 +57,7 @@ if __name__ == '__main__':
     train_imgs = data[0][0]
     
     m = model.PoolNet(train_imgs[0]).to(device)
-    LSUV_(m, train_imgs)
+    LSUV_(m, train_imgs[:min(1000, len(train_imgs))])
     train_model(m, data)
  
  
