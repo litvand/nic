@@ -11,7 +11,7 @@ def train_model(m, data):
     m.train()
     (train_imgs, train_labels), (valid_imgs, valid_labels) = data
 
-    batch_size = 500
+    batch_size = 100
     n_iter = 50000
     optimizer = torch.optim.Adam(m.parameters(), lr=0.0003)
     
@@ -26,7 +26,7 @@ def train_model(m, data):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        if iter % 150 == 0:
+        if iter % 400 == 0:
             with torch.no_grad():
                 m.eval()
                 print(f"Iter {iter} \tloss {loss.item()}")
