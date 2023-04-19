@@ -45,7 +45,7 @@ def git_commit():
         return
     
     repo.git.add('.')
-    repo.git.commit('-m', '_Automated commit')
+    repo.git.commit('-m', '_Automated commit') 
 
 
 if __name__ == '__main__':
