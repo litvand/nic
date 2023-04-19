@@ -56,7 +56,7 @@ if __name__ == '__main__':
     data = mnist.load_data(n_train=20000, n_valid=2000, device=device)
     train_imgs = data[0][0]
     
-    m = model.Model(train_imgs[0]).to(device)
+    m = model.PoolNet(train_imgs[0]).to(device)
     LSUV_(m, train_imgs)
     train_model(m, data)
  
