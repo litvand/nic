@@ -35,7 +35,7 @@ class PoolNet(nn.Module):
         )
 
         with torch.no_grad():
-            n_conv_features = self.convs(example_img.unsqueeze(0)).numel()
+            n_conv_features = self.convs(example_img.cpu().unsqueeze(0)).numel()
 
         self.fully_connected = nn.Sequential( 
             nn.Linear(n_conv_features, 200),
