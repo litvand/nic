@@ -59,4 +59,4 @@ if __name__ == '__main__':
     m = model.Model(train_imgs[0]).to(device)
     LSUV_(m, train_imgs)
     train_model(m, data)
-
+ 
