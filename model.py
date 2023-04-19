@@ -29,16 +29,17 @@ class PoolNet(nn.Module):
         self.convs = nn.Sequential(
             nn.Conv2d(in_channels=example_img.size()[0], out_channels=50, kernel_size=7, padding=6),
             nn.MaxPool2d(2),
-            nn.Conv2d(in_channels=50, out_channels=128, kernel_size=5),
+            nn.Conv2d(in_channels=50, out_channels=128, kernel_size=7),
             nn.MaxPool2d(2),
             nn.Flatten()
         )
 
         with torch.no_grad():
-            n_conv_features = self.convs(example_img.cpu().unsqueeze(0)).numel()
-
+            n_fc_inputs = self.convs(example_img.cpu().unsqueeze(0)).numel()
+        
+        print("Number of input features to fully connected layers:", n_fc_inputs)
         self.fully_connected = nn.Sequential( 
-            nn.Linear(n_conv_features, 200),
+            nn.Linear(n_fc_inputs, 200),
             nn.GELU(),
             nn.Linear(200, N_CLASSES)
         )
