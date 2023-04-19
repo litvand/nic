@@ -11,9 +11,9 @@ def train_model(m, data):
     m.train()
     (train_imgs, train_labels), (valid_imgs, valid_labels) = data
 
-    batch_size = 1000
+    batch_size = 10000
     n_iter = 50000
-    optimizer = torch.optim.Adam(m.parameters(), lr=0.0002)
+    optimizer = torch.optim.Adam(m.parameters(), lr=0.0003)
     
     for iter in range(n_iter):
         indices = torch.randint(high=len(train_imgs), size=(batch_size,))
