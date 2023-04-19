@@ -11,9 +11,9 @@ def train_model(m, data):
     m.train()
     (train_imgs, train_labels), (valid_imgs, valid_labels) = data
 
-    batch_size = 400
+    batch_size = 60
     n_iter = 50000
-    optimizer = torch.optim.Adam(m.parameters(), lr=1e-4, weight_decay=1e-9)
+    optimizer = torch.optim.Adam(m.parameters(), lr=5e-5, weight_decay=1e-9)
     
     for iter in range(n_iter):
         indices = torch.randint(high=len(train_imgs), size=(batch_size,))
@@ -26,7 +26,7 @@ def train_model(m, data):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        if iter % 400 == 0:
+        if iter % 500 == 0:
             with torch.no_grad():
                 m.eval()
                 print(f"Iter {iter} \tloss {loss.item()}")
