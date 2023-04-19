@@ -1,5 +1,5 @@
-import torch
 import matplotlib.pyplot as plt
+import torch
 
 
 TRAIN_PIXEL_MEAN = 33.0
