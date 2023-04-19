@@ -28,8 +28,10 @@ class PoolNet(nn.Module):
         super().__init__()
         self.convs = nn.Sequential(
             nn.Conv2d(in_channels=example_img.size()[0], out_channels=50, kernel_size=7, padding=6),
+            nn.GELU(),
             nn.MaxPool2d(2),
             nn.Conv2d(in_channels=50, out_channels=128, kernel_size=7),
+            nn.GELU(),
             nn.MaxPool2d(2),
             nn.Flatten()
         )
