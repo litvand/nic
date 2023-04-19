@@ -26,7 +26,7 @@ def train_model(m, data):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        if iter % 200 == 0:
+        if iter % 150 == 0:
             with torch.no_grad():
                 m.eval()
                 print(f"Iter {iter} \tloss {loss.item()}")
