@@ -12,7 +12,7 @@ def train_model(m, data):
     (train_imgs, train_labels), (valid_imgs, valid_labels) = data
 
     batch_size = 1000
-    n_iter = 10000
+    n_iter = 50000
     optimizer = torch.optim.Adam(m.parameters(), lr=0.0002)
     
     for iter in range(n_iter):
