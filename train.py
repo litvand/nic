@@ -13,7 +13,7 @@ def train_model(m, data):
 
     batch_size = 400
     n_iter = 50000
-    optimizer = torch.optim.Adam(m.parameters(), lr=0.0001)
+    optimizer = torch.optim.Adam(m.parameters(), lr=1e-4, weight_decay=1e-9)
     
     for iter in range(n_iter):
         indices = torch.randint(high=len(train_imgs), size=(batch_size,))
