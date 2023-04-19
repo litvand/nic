@@ -13,6 +13,7 @@ class Model(nn.Module):
         )
         #self.conv1 = nn.Conv2d(in_channels=example_img.size[0], out_channels=)
 
+
     def forward(self, img_batch):
         return self.fc(img_batch)
 

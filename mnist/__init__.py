@@ -44,12 +44,10 @@ def imgs_from_file(filename, n_imgs=-1):
     return imgs
 
 
-def load_data(n_train, n_valid):
+def load_data(n_train, n_valid, device):
     '''Returns (train_imgs, train_labels), (validation_imgs, validation_labels).'''
-    labels = labels_from_file('data/train-labels.idx1-ubyte', n_train + n_valid)
-    imgs = imgs_from_file('data/train-images.idx3-ubyte', n_train + n_valid)
-    #perm = torch.randperm(n_train + n_valid)
-    #imgs, labels = imgs[perm], labels[perm] # Shuffle images and labels the same way.
+    labels = labels_from_file('data/train-labels.idx1-ubyte', n_train + n_valid).to(device)
+    imgs = imgs_from_file('data/train-images.idx3-ubyte', n_train + n_valid).to(device)
     return (imgs[:n_train], labels[:n_train]), (imgs[n_train:], labels[n_train:])
 
 
