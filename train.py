@@ -50,15 +50,13 @@ def git_commit():
 
 if __name__ == '__main__':
     git_commit()
-    torch.manual_seed(412790)
+    torch.manual_seed(98765)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     data = mnist.load_data(n_train=20000, n_valid=2000, device=device)
     train_imgs = data[0][0]
     
     m = model.PoolNet(train_imgs[0]).to(device)
-    model.load(m, 'pool-4752ff58400b547542e98cbdd6d2928aa6b23f2b.pt')
-    #LSUV_(m, train_imgs[:min(2000, len(train_imgs))])
+    LSUV_(m, train_imgs[:2000])
     train_model(m, data)
- 
  
