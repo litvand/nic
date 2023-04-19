@@ -32,7 +32,7 @@ def train_model(m, data):
                 print(f"Iter {iter} \tloss {loss.item()}")
                 print_accuracy("Train batch accuracy", batch_outputs, batch_labels)
                 print_accuracy("Valid accuracy", m(valid_imgs), valid_labels)
-                model.save(m, 'fc')
+                model.save(m, 'pool')
                 m.train()
 
     m.eval()
