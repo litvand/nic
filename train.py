@@ -40,8 +40,8 @@ def train_model(m, data):
 
 def git_commit():
     repo = git.Repo()
-    if repo.active_branch.name == 'master': # Don't clutter the master branch.
-        print('NOTE: No automated commit, because on master branch')
+    if repo.active_branch.name == 'main': # Don't clutter the main branch.
+        print('NOTE: No automated commit, because on main branch')
         return
     
     repo.git.add('.')
