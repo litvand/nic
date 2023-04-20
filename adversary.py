@@ -66,7 +66,8 @@ def fgsm_(imgs, labels, trained_model, max_dist, norm, target_class=None):
 
 
 def cmp_targeted(imgs, labels, trained_model, max_dist, norm):
-    '''Compare accuracies with different target classes.'''
+    '''Compare accuracies with different target classes. Accuracy with an
+    untargeted adversary should be lower than accuracy with any target class.'''
     for c in range(N_CLASSES):
         targeted_imgs = imgs.clone()
         fgsm_(targeted_imgs, labels, trained_model, max_dist, norm, target_class=c)
@@ -104,11 +105,16 @@ if __name__ == '__main__':
     model.load(m, 'pool-bnorm-20k-faeca80e1ca4e0d35fe14157fdb4f02183d3d3cd.pt')
     m.eval()
 
-    #print_accuracy('Original accuracy', m(train_imgs), train_labels)
-    untargeted_imgs = train_imgs.clone()
-    fgsm_(untargeted_imgs, train_labels, m, max_dist=10.0, norm=2)
-    print_accuracy('Untargeted accuracy', m(untargeted_imgs), train_labels)
-    cmp_targeted(train_imgs, train_labels, m, max_dist=10.0, norm=2)
+    print_accuracy('Original accuracy', m(train_imgs), train_labels)
     
+    max_dist = 10.0
+    norm = 2
+
+    untargeted_imgs = train_imgs.clone()
+    fgsm_(untargeted_imgs, train_labels, m, max_dist, norm)
+    print_accuracy('Untargeted accuracy', m(untargeted_imgs), train_labels)
+    
+    cmp_targeted(train_imgs, train_labels, m, max_dist, norm)
+    cmp_single(-1, train_imgs, train_labels, m, max_dist, norm)
     
 
