@@ -7,7 +7,7 @@ import model
 def print_accuracy(msg, outputs, labels):
     output_classes = torch.argmax(outputs, 1) # Convert logits to class indices.
     accuracy = torch.sum(output_classes == labels) / float(len(labels))
-    print(msg, round(accuracy.item(), 3))
+    print(msg, round(accuracy.item(), 3), output_classes)
 
 
 if __name__ == '__main__':
