@@ -1,5 +1,6 @@
 import git
 import torch
+from torch import nn
 from lsuv_init import LSUV_
 
 import mnist
@@ -21,7 +22,7 @@ def train_model(m, data):
         batch_labels = train_labels[indices]
 
         batch_outputs = m(batch_imgs)
-        loss = torch.nn.functional.cross_entropy(batch_outputs, batch_labels)
+        loss = nn.functional.cross_entropy(batch_outputs, batch_labels)
         
         optimizer.zero_grad()
         loss.backward()
@@ -29,9 +30,11 @@ def train_model(m, data):
         if iter % 500 == 0:
             with torch.no_grad():
                 m.eval()
-                print(f"Iter {iter} \tloss {loss.item()}")
-                print_accuracy("Train batch accuracy", batch_outputs, batch_labels)
-                print_accuracy("Valid accuracy", m(valid_imgs), valid_labels)
+                print(f'Iter {iter} \tloss {loss.item()}')
+                print_accuracy('Train batch accuracy', batch_outputs, batch_labels)
+                valid_outputs = m(valid_imgs)
+                print_accuracy('Validation accuracy', valid_outputs, valid_labels)
+                print('Validation loss', nn.functional.cross_entropy(valid_outputs, valid_labels))
                 model.save(m, 'pool')
                 m.train()
 
