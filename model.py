@@ -14,6 +14,7 @@ class FullyConnected(nn.Module):
             nn.Flatten(),
             nn.Linear(example_img.numel(), n_hidden),
             nn.GELU(),
+            nn.BatchNorm1d(n_hidden),
             nn.Linear(n_hidden, N_CLASSES)
         )
 
@@ -28,13 +29,13 @@ class PoolNet(nn.Module):
         super().__init__()
         self.convs = nn.Sequential(
             nn.Conv2d(in_channels=example_img.size()[0], out_channels=50, kernel_size=7, padding=2),
+            nn.GELU(),
+            nn.MaxPool2d(2),
             nn.BatchNorm2d(50),
-            nn.GELU(),
-            nn.MaxPool2d(2),
             nn.Conv2d(in_channels=50, out_channels=128, kernel_size=7),
-            nn.BatchNorm2d(128),
             nn.GELU(),
             nn.MaxPool2d(2),
+            nn.BatchNorm2d(128),
             nn.Flatten()
         )
 

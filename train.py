@@ -13,10 +13,10 @@ def train_model(m, data):
     (train_imgs, train_labels), (valid_imgs, valid_labels) = data
 
     batch_size = 60
-    n_iter = 50000
+    n_epochs = 3
     optimizer = torch.optim.Adam(m.parameters(), lr=1e-5, weight_decay=1e-9)
     
-    for iter in range(n_iter):
+    for iter in range(1 + n_epochs*len(train_imgs) // batch_size):
         indices = torch.randint(high=len(train_imgs), size=(batch_size,))
         batch_imgs = train_imgs[indices]
         batch_labels = train_labels[indices]
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     train_imgs = data[0][0]
     
     m = model.PoolNet(train_imgs[0]).to(device)
-    model.load(m, 'pool-65af73b38cf6e35aa7f96e74100d186e12033ef2.pt')
-    #LSUV_(m, train_imgs[:2000])
+    #model.load(m, 'pool-65af73b38cf6e35aa7f96e74100d186e12033ef2.pt')
+    LSUV_(m, train_imgs[:2000])
     train_model(m, data) 
  
