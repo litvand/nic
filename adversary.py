@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 from torch import nn
 
+import art_example
 import mnist
 import model
 from test import print_accuracy
@@ -10,10 +11,7 @@ from test import print_accuracy
 N_CLASSES = 10
 
 
-# max_dist=2 gives PoolNet accuracy <10% on training images.
-
-
-def fgsm_(imgs, labels, trained_model, max_dist, target_class=None):
+def fgsm_(imgs, labels, trained_model, eps, target_class=None):
     imgs.requires_grad = True
     imgs.grad = None
 
@@ -36,7 +34,7 @@ def fgsm_(imgs, labels, trained_model, max_dist, target_class=None):
     loss.backward()
 
     with torch.no_grad():
-        imgs += max_dist * imgs.grad.sign()
+        imgs += eps * imgs.grad.sign()
     
     # Unfreeze model if it wasn't frozen before
     for i, p in enumerate(trained_model.parameters()):
@@ -46,16 +44,16 @@ def fgsm_(imgs, labels, trained_model, max_dist, target_class=None):
     imgs.grad = None
 
 
-def cmp_targeted(imgs, labels, trained_model, max_dist):
+def cmp_targeted(imgs, labels, trained_model, eps):
     '''Compare accuracies with different target classes. Accuracy with an
     untargeted adversary should be lower than accuracy with any target class.'''
     for c in range(N_CLASSES):
         targeted_imgs = imgs.clone()
-        fgsm_(targeted_imgs, labels, trained_model, max_dist, target_class=c)
+        fgsm_(targeted_imgs, labels, trained_model, eps, target_class=c)
         print_accuracy(f'{c} targeted accuracy', trained_model(targeted_imgs), labels)
 
 
-def cmp_single(i_img, imgs, labels, trained_model, max_dist):
+def cmp_single(i_img, imgs, labels, trained_model, eps):
     '''Compare a single image with its adversarially modified version.'''
 
     adv_img = imgs[i_img].clone()
@@ -63,7 +61,7 @@ def cmp_single(i_img, imgs, labels, trained_model, max_dist):
         adv_img.unsqueeze(0),
         labels[i_img].unsqueeze(0),
         trained_model,
-        max_dist,
+        eps,
         target_class=None
     )
 
@@ -77,21 +75,32 @@ def cmp_single(i_img, imgs, labels, trained_model, max_dist):
     plt.show()
 
 
+# n_train=58000, n_valid=2000, art_example.Net(), n_epochs=6, eps=0.07 gives:
+# Original accuracy 0.984
+# Untargeted accuracy 0.531
+
+# art_example with same parameters except for eps=0.2:
+# Accuracy on benign test examples: 98.45%
+# Accuracy on adversarial test examples: 54.1%
+
+# I guess pixel scaling is different somewhere between the example and this repo by
+# approximately a factor of 3, since the accuracy on benign examples is the same.
+
 if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    (train_imgs, train_labels), _ = mnist.load_data(n_train=1000, n_valid=0, device=device) 
+    _, (imgs, labels) = mnist.load_data(n_train=58000, n_valid=2000, device=device) 
     
-    m = model.PoolNet(train_imgs[0]).to(device)
-    model.load(m, 'pool-bnorm-20k-faeca80e1ca4e0d35fe14157fdb4f02183d3d3cd.pt')
+    m = art_example.Net().to(device)
+    model.load(m, 'art-d0ef50afe3c1a6cb47b069d3c42a6c832f3c1ed9.pt')
     m.eval()
-    print_accuracy('Original accuracy', m(train_imgs), train_labels)
+    print_accuracy('Original accuracy', m(imgs), labels)
     
-    max_dist = 0.4
-    untargeted_imgs = train_imgs.clone()
-    fgsm_(untargeted_imgs, train_labels, m, max_dist)
-    print_accuracy('Untargeted accuracy', m(untargeted_imgs), train_labels)
+    eps = 0.07
+    untargeted_imgs = imgs.clone()
+    fgsm_(untargeted_imgs, labels, m, eps)
+    print_accuracy('Untargeted accuracy', m(untargeted_imgs), labels)
     
-    cmp_targeted(train_imgs, train_labels, m, max_dist)
-    cmp_single(-1, train_imgs, train_labels, m, max_dist)
+    #cmp_targeted(imgs, labels, m, eps)
+    cmp_single(-1, imgs, labels, m, eps)
     
 
