@@ -79,8 +79,8 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     _, (imgs, labels) = mnist.load_data(n_train=58000, n_valid=2000, device=device) 
     
-    m = art_example.Net().to(device)
-    model.load(m, 'art-a9c1e9376eea5b57d06cc8b9b9155894f6478d50.pt')
+    m = model.PoolNet(imgs[0]).to(device)
+    model.load(m, 'pool-bnorm-58k-f656fe761c9714c8ea6ac237d4b9d6a1ccb683c8.pt')
     m.eval()
     print_accuracy('Original accuracy', m(imgs), labels)
     

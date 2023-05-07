@@ -36,7 +36,7 @@ def train_model(m, data):
                 valid_outputs = m(valid_imgs)
                 print_accuracy('Validation accuracy', valid_outputs, valid_labels)
                 print('Validation loss', nn.functional.cross_entropy(valid_outputs, valid_labels))
-                model.save(m, 'art')
+                model.save(m, 'pool')
                 m.train()
 
     m.eval()
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     data = mnist.load_data(n_train=58000, n_valid=2000, device=device)
     train_imgs = data[0][0]
     
-    m = art_example.Net().to(device)
+    m = model.PoolNet(train_imgs[0]).to(device)
     #model.load(m, 'art-a9c1e9376eea5b57d06cc8b9b9155894f6478d50.pt')
     LSUV_(m, train_imgs[:2000])
     train_model(m, data) 
