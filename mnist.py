@@ -38,8 +38,9 @@ def imgs_from_file(filename, n_imgs=-1):
     
     n_channels = 1
     imgs = torch.frombuffer(imgs, dtype=torch.uint8).view(n_imgs, n_channels, n_rows, n_cols)
-    imgs = imgs * (1.0/255.0)
-    imgs.sub_(0.5) # In range [-0.5, 0.5]
+    imgs = imgs - TRAIN_PIXEL_MEAN
+    imgs.mul_(1.0/TRAIN_PIXEL_STDDEV)
+    print('MNIST whitened mean, std', torch.mean(imgs), torch.std(imgs))
     return imgs
 
 

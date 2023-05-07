@@ -75,27 +75,26 @@ def cmp_single(i_img, imgs, labels, trained_model, eps):
     plt.show()
 
 
-# n_train=58000, n_valid=2000, art_example.Net(), n_epochs=6, eps=0.07 gives:
-# Original accuracy 0.984
-# Untargeted accuracy 0.531
+# n_train=58000, n_valid=2000, art_example.Net(), n_epochs=6, eps=0.2 gives:
+# Original accuracy 0.98
+# Untargeted accuracy 0.524
 
-# art_example with same parameters except for eps=0.2:
+# art_example with same parameters:
 # Accuracy on benign test examples: 98.45%
 # Accuracy on adversarial test examples: 54.1%
 
-# I guess pixel scaling is different somewhere between the example and this repo by
-# approximately a factor of 3, since the accuracy on benign examples is the same.
+# I guess pixel scaling is slightly different somewhere between ART's example and this repo.
 
 if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     _, (imgs, labels) = mnist.load_data(n_train=58000, n_valid=2000, device=device) 
     
     m = art_example.Net().to(device)
-    model.load(m, 'art-d0ef50afe3c1a6cb47b069d3c42a6c832f3c1ed9.pt')
+    model.load(m, 'art-58k-6epoch-whiten-aeeaceb5e68c261b3d0623844a45a46d9a66dcca.pt')
     m.eval()
     print_accuracy('Original accuracy', m(imgs), labels)
     
-    eps = 0.07
+    eps = 0.2
     untargeted_imgs = imgs.clone()
     fgsm_(untargeted_imgs, labels, m, eps)
     print_accuracy('Untargeted accuracy', m(untargeted_imgs), labels)
