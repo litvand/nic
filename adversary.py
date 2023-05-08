@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import torch
-from torch import nn
+import torch.nn.functional as F
 
 import art_example
 import mnist
@@ -8,6 +8,32 @@ import model
 from eval import print_accuracy
 
 N_CLASSES = 10
+
+
+def fgsm_detector_data(data_pair, trained_model, eps):
+    '''
+    Generate data for training FGSM detector.
+
+    data_pair: Original dataset images and labels
+    trained_model: Model to classify original dataset
+    eps: FGSM eps to use when generating new dataset
+
+    returns: detector_imgs, detector_labels
+             Detector label is 1 if the image is adversarial and 0 otherwise.
+    '''
+
+    imgs, labels = data_pair
+    detector_imgs = imgs.clone()
+    n_adv = len(imgs)//2  # Number of images to adversarially modify
+
+    fgsm_(detector_imgs[:n_adv], labels[:n_adv], trained_model, eps)
+    detector_labels = torch.zeros(len(imgs), dtype=torch.uint8, device=labels.device)
+    torch.fill_(detector_labels[:n_adv], 1)  # Label these images as modified by FGSM
+    perm = torch.randperm(len(imgs))  # Don't have all adversarial images at the start
+    detector_imgs = detector_imgs[perm]
+    detector_labels = detector_labels[perm]
+
+    return detector_imgs, detector_labels
 
 
 def fgsm_(imgs, labels, trained_model, eps, target_class=None):
@@ -20,17 +46,20 @@ def fgsm_(imgs, labels, trained_model, eps, target_class=None):
         required_grad.append(p.requires_grad)
         p.requires_grad = False
 
-    outputs = trained_model(imgs)
+    chunk_size = 2000  # Choose maximum size that fits in GPU memory
+    for i_first in range(0, len(imgs), chunk_size):
+        outputs = trained_model(imgs[i_first:i_first + chunk_size])
 
-    if target_class is None:  # Untargeted adversary: Make output differ from the correct label.
-        loss = nn.functional.cross_entropy(outputs, labels)
+        if target_class is None:
+            # Untargeted adversary: Make output differ from the correct label.
+            loss = F.cross_entropy(outputs, labels[i_first:i_first + chunk_size])
+        else:
+            # Targeted adversary: Make output equal to the target class.
+            output_prs = F.softmax(outputs, dim=1)
+            # Maximize probability of the target class.
+            loss = torch.mean(output_prs[:, target_class])
 
-    else:  # Targeted adversary: Make output equal to the target class.
-        output_prs = nn.functional.softmax(outputs, dim=1)
-        loss = torch.mean(output_prs[:, target_class])
-
-    print("FGSM loss", loss.item())
-    loss.backward()
+        loss.backward()
 
     with torch.no_grad():
         imgs += eps * imgs.grad.sign()
@@ -88,8 +117,8 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     _, (imgs, labels) = mnist.load_data(n_train=58000, n_valid=2000, device=device)
 
-    m = art_example.Net().to(device)
-    model.load(m, "art-58k-6epoch-whiten-aeeaceb5e68c261b3d0623844a45a46d9a66dcca.pt")
+    m = model.PoolNet(imgs[0]).to(device)
+    model.load(m, "pool-bnorm-58k-f656fe761c9714c8ea6ac237d4b9d6a1ccb683c8.pt")
     m.eval()
     print_accuracy("Original accuracy", m(imgs), labels)
 
@@ -99,4 +128,15 @@ if __name__ == "__main__":
     print_accuracy("Untargeted accuracy", m(untargeted_imgs), labels)
 
     # cmp_targeted(imgs, labels, m, eps)
-    cmp_single(-1, imgs, labels, m, eps)
+    # cmp_single(-1, imgs, labels, m, eps)
+
+    detector = model.Detector(imgs[0]).to(device)
+    model.load(detector, "detect6-9f9acdd513fd4da6920d657a85c392f01297daca.pt")
+    detector.eval()
+
+    with torch.no_grad():
+        pr_original_adv = torch.mean(F.softmax(detector(imgs), dim=1)[:, 1])
+        pr_adv_adv = torch.mean(F.softmax(detector(imgs), dim=1)[:, 1])
+
+    print("Predicted probability that original images are adversarial:", pr_original_adv)
+    print("Predicted probability that adversarial images are adversarial:", pr_adv_adv)

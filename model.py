@@ -57,6 +57,22 @@ class PoolNet(nn.Module):
         return self.fully_connected(self.convs(img_batch))
 
 
+class Detector(nn.Module):
+    def __init__(self, example_img):
+        super().__init__()
+        n_hidden = 800
+        self.seq = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(example_img.numel(), n_hidden),
+            nn.GELU(),
+            nn.BatchNorm1d(n_hidden),
+            nn.Linear(n_hidden, 2),
+        )
+
+    def forward(self, img_batch):
+        return self.seq(img_batch)
+
+
 def save(model, model_name):
     # Can look at exact parameters and data that the model was trained on using the commit.
     last_commit = git.Repo().head.object.hexsha
