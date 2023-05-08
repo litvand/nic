@@ -2,20 +2,20 @@ import git
 import torch
 from torch import nn
 
-import art_example
 import mnist
 import model
+from adversary import fgsm_detector_data
 from eval import print_accuracy
 from lsuv_init import LSUV_
 
 
-def train_model(m, data):
+def train_model(m, data, name):
     m.train()
     (train_imgs, train_labels), (valid_imgs, valid_labels) = data
 
     batch_size = 64
     n_epochs = 6
-    optimizer = torch.optim.Adam(m.parameters(), lr=1e-2)
+    optimizer = torch.optim.Adam(m.parameters(), lr=1e-2, weight_decay=1e-9)
 
     for iter in range(1 + n_epochs * len(train_imgs) // batch_size):
         indices = torch.randint(high=len(train_imgs), size=(batch_size,))
@@ -39,7 +39,7 @@ def train_model(m, data):
                     "Validation loss",
                     nn.functional.cross_entropy(valid_outputs, valid_labels),
                 )
-                model.save(m, "art")
+                model.save(m, name)
                 m.train()
 
     m.eval()
@@ -63,7 +63,16 @@ if __name__ == "__main__":
     data = mnist.load_data(n_train=58000, n_valid=2000, device=device)
     train_imgs = data[0][0]
 
-    m = art_example.Net().to(device)
-    # model.load(m, 'art-a9c1e9376eea5b57d06cc8b9b9155894f6478d50.pt')
-    LSUV_(m, train_imgs[:2000])
-    train_model(m, data)
+    m = model.PoolNet(train_imgs[0]).to(device)
+    model.load(m, 'pool-bnorm-58k-f656fe761c9714c8ea6ac237d4b9d6a1ccb683c8.pt')
+
+    if False:
+        LSUV_(m, train_imgs[:2000])
+        train_model(m, data, 'pool')
+    else:
+        detector_data = (
+            fgsm_detector_data(data[0], m, eps=0.2),
+            fgsm_detector_data(data[1], m, eps=0.2)
+        )
+        detector = model.Detector(detector_data[0][0][0]).to(device)
+        train_model(detector, detector_data, 'detect')

@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import torch
-from torch import nn
+import torch.nn.functional as F
 
 import art_example
 import mnist
@@ -8,6 +8,29 @@ import model
 from eval import print_accuracy
 
 N_CLASSES = 10
+
+
+def fgsm_detector_data(data_pair, trained_model, eps):
+    '''
+    Generate data for training FGSM detector.
+
+    data_pair: Original dataset images and labels
+    trained_model: Model to classify original dataset
+    eps: FGSM eps to use when generating new dataset
+    '''
+
+    imgs, labels = data_pair
+    detector_imgs = imgs.clone()
+    n_adv = len(imgs)//2  # Number of images to adversarially modify
+
+    fgsm_(detector_imgs[:n_adv], labels[:n_adv], trained_model, eps)
+    detector_labels = torch.zeros(len(imgs), dtype=torch.uint8, device=labels.device)
+    torch.fill_(detector_labels[:n_adv], 1)  # Label these images as modified by FGSM
+    perm = torch.randperm(len(imgs))  # Don't have all adversarial images at the start
+    detector_imgs = detector_imgs[perm]
+    detector_labels = detector_labels[perm]
+
+    return detector_imgs, detector_labels
 
 
 def fgsm_(imgs, labels, trained_model, eps, target_class=None):
@@ -20,17 +43,20 @@ def fgsm_(imgs, labels, trained_model, eps, target_class=None):
         required_grad.append(p.requires_grad)
         p.requires_grad = False
 
-    outputs = trained_model(imgs)
+    chunk_size = 1000
+    for i_first in range(0, len(imgs), chunk_size):
+        outputs = trained_model(imgs[i_first:i_first + chunk_size])
 
-    if target_class is None:  # Untargeted adversary: Make output differ from the correct label.
-        loss = nn.functional.cross_entropy(outputs, labels)
+        if target_class is None:
+            # Untargeted adversary: Make output differ from the correct label.
+            loss = F.cross_entropy(outputs, labels[i_first:i_first + chunk_size])
+        else:
+            # Targeted adversary: Make output equal to the target class.
+            output_prs = F.softmax(outputs, dim=1)
+            # Maximize probability of the target class.
+            loss = torch.mean(output_prs[:, target_class])
 
-    else:  # Targeted adversary: Make output equal to the target class.
-        output_prs = nn.functional.softmax(outputs, dim=1)
-        loss = torch.mean(output_prs[:, target_class])
-
-    print("FGSM loss", loss.item())
-    loss.backward()
+        loss.backward()
 
     with torch.no_grad():
         imgs += eps * imgs.grad.sign()
