@@ -1,9 +1,7 @@
-import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 
-# import art_example
 import mnist
 import model
 from eval import print_accuracy
@@ -12,17 +10,17 @@ N_CLASSES = 10
 
 
 def prs_adv(detector, imgs):
-    '''Returns probability of being adversarial for each image'''
+    """Returns probability of being adversarial for each image"""
     return F.softmax(detector(imgs), dim=1)[:, 1]
 
 
 def classify_adv(detector, imgs, threshold):
-    '''Classifies images as adversarial or not based on the threshold'''
+    """Classifies images as adversarial or not based on the threshold"""
     return prs_adv(detector, imgs) > threshold
 
 
 def fgsm_detector_data(data_pair, trained_model, eps):
-    '''
+    """
     Generate data for training FGSM detector.
 
     data_pair: Original dataset images and labels
@@ -31,11 +29,11 @@ def fgsm_detector_data(data_pair, trained_model, eps):
 
     returns: detector_imgs, detector_labels
              Detector label is 1 if the image is adversarial and 0 otherwise.
-    '''
+    """
 
     imgs, labels = data_pair
     detector_imgs = imgs.clone()
-    n_adv = len(imgs)//2  # Number of images to adversarially modify
+    n_adv = len(imgs) // 2  # Number of images to adversarially modify
 
     fgsm_(detector_imgs[:n_adv], labels[:n_adv], trained_model, eps)
     detector_labels = torch.zeros(len(imgs), dtype=torch.uint8, device=labels.device)
@@ -59,11 +57,11 @@ def fgsm_(imgs, labels, trained_model, eps, target_class=None):
 
     chunk_size = 2000  # Choose maximum size that fits in GPU memory
     for i_first in range(0, len(imgs), chunk_size):
-        outputs = trained_model(imgs[i_first:i_first + chunk_size])
+        outputs = trained_model(imgs[slice(i_first, i_first + chunk_size)])
 
         if target_class is None:
             # Untargeted adversary: Make output differ from the correct label.
-            loss = F.cross_entropy(outputs, labels[i_first:i_first + chunk_size])
+            loss = F.cross_entropy(outputs, labels[slice(i_first, i_first + chunk_size)])
         else:
             # Targeted adversary: Make output equal to the target class.
             output_prs = F.softmax(outputs, dim=1)
@@ -118,8 +116,8 @@ def plot_distr_overlap(a, b):
     a, _ = a.sort()
     b, _ = b.sort()
 
-    a_reverse_cumulative = torch.arange(len(a), 0, -1, device='cpu') / float(len(a))
-    b_cumulative = torch.arange(len(b), device='cpu') / float(len(b))
+    a_reverse_cumulative = torch.arange(len(a), 0, -1, device="cpu") / float(len(a))
+    b_cumulative = torch.arange(len(b), device="cpu") / float(len(b))
 
     plt.subplots()
     plt.scatter(a.cpu(), a_reverse_cumulative)
@@ -173,11 +171,11 @@ if __name__ == "__main__":
     for threshold in [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 0.9, 0.95, 0.99, 0.995, 0.999]:
         print(
             f"Detector accuracy on original images with threshold {threshold}:",
-            torch.sum(prs_original_adv < threshold) / len(imgs)
+            torch.sum(prs_original_adv < threshold) / len(imgs),
         )
         print(
             f"Detector accuracy on adversarial images with threshold {threshold}:",
-            torch.sum(prs_adv_adv > threshold) / len(imgs)
+            torch.sum(prs_adv_adv > threshold) / len(imgs),
         )
 
 # Can detect 90% of adversarial images while classifying 90% of normal images correctly, or
