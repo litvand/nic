@@ -1,3 +1,4 @@
+import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
@@ -8,6 +9,16 @@ import model
 from eval import print_accuracy
 
 N_CLASSES = 10
+
+
+def prs_adv(detector, imgs):
+    '''Returns probability of being adversarial for each image'''
+    return F.softmax(detector(imgs), dim=1)[:, 1]
+
+
+def classify_adv(detector, imgs, threshold):
+    '''Classifies images as adversarial or not based on the threshold'''
+    return prs_adv(detector, imgs) > threshold
 
 
 def fgsm_detector_data(data_pair, trained_model, eps):
@@ -103,6 +114,19 @@ def cmp_single(i_img, imgs, labels, trained_model, eps):
     plt.show()
 
 
+def plot_distr_overlap(a, b):
+    a, _ = a.sort()
+    b, _ = b.sort()
+
+    a_reverse_cumulative = torch.arange(len(a), 0, -1, device='cpu') / float(len(a))
+    b_cumulative = torch.arange(len(b), device='cpu') / float(len(b))
+
+    plt.subplots()
+    plt.scatter(a.cpu(), a_reverse_cumulative)
+    plt.scatter(b.cpu(), b_cumulative)
+    plt.show()
+
+
 # n_train=58000, n_valid=2000, art_example.Net(), n_epochs=6, eps=0.2 gives:
 # Original accuracy 0.98
 # Untargeted accuracy 0.524
@@ -135,8 +159,26 @@ if __name__ == "__main__":
     detector.eval()
 
     with torch.no_grad():
-        pr_original_adv = torch.mean(F.softmax(detector(imgs), dim=1)[:, 1])
-        pr_adv_adv = torch.mean(F.softmax(detector(untargeted_imgs), dim=1)[:, 1])
+        prs_original_adv = prs_adv(detector, imgs)
+        prs_adv_adv = prs_adv(detector, untargeted_imgs)
 
-    print("Predicted probability that original images are adversarial:", pr_original_adv)
-    print("Predicted probability that adversarial images are adversarial:", pr_adv_adv)
+    print(
+        f"Predicted probability that original images are adversarial {torch.mean(prs_original_adv)}"
+    )
+    print(
+        f"Predicted probability that adversarial images are adversarial {torch.mean(prs_adv_adv)}"
+    )
+    plot_distr_overlap(prs_original_adv, prs_adv_adv)
+
+    for threshold in [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 0.9, 0.95, 0.99, 0.995, 0.999]:
+        print(
+            f"Detector accuracy on original images with threshold {threshold}:",
+            torch.sum(prs_original_adv < threshold) / len(imgs)
+        )
+        print(
+            f"Detector accuracy on adversarial images with threshold {threshold}:",
+            torch.sum(prs_adv_adv > threshold) / len(imgs)
+        )
+
+# Can detect 90% of adversarial images while classifying 90% of normal images correctly, or
+# detect 50% of adversarial images while classifying 99.5% of normal images correctly.
