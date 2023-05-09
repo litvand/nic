@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 
-import art_example
+# import art_example
 import mnist
 import model
 from eval import print_accuracy
