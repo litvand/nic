@@ -115,10 +115,10 @@ def cmp_single(i_img, imgs, labels, trained_model, eps):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    _, (imgs, labels) = mnist.load_data(n_train=58000, n_valid=2000, device=device)
+    _, (imgs, labels) = mnist.load_data(n_train=22000, n_valid=5000, device=device)
 
     m = model.PoolNet(imgs[0]).to(device)
-    model.load(m, "pool-bnorm-58k-f656fe761c9714c8ea6ac237d4b9d6a1ccb683c8.pt")
+    model.load(m, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
     m.eval()
     print_accuracy("Original accuracy", m(imgs), labels)
 
@@ -131,12 +131,12 @@ if __name__ == "__main__":
     # cmp_single(-1, imgs, labels, m, eps)
 
     detector = model.Detector(imgs[0]).to(device)
-    model.load(detector, "detect6-9f9acdd513fd4da6920d657a85c392f01297daca.pt")
+    model.load(detector, "detect-18dab86434e82bce7472c09da5f82864a6424e86.pt")
     detector.eval()
 
     with torch.no_grad():
         pr_original_adv = torch.mean(F.softmax(detector(imgs), dim=1)[:, 1])
-        pr_adv_adv = torch.mean(F.softmax(detector(imgs), dim=1)[:, 1])
+        pr_adv_adv = torch.mean(F.softmax(detector(untargeted_imgs), dim=1)[:, 1])
 
     print("Predicted probability that original images are adversarial:", pr_original_adv)
     print("Predicted probability that adversarial images are adversarial:", pr_adv_adv)
