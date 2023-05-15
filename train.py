@@ -49,6 +49,19 @@ def train_model(m, data, name):
     m.eval()
 
 
+def train_detector(trained_model, data, load_name=None, eps=0.2):
+    detector_data = (
+        fgsm_detector_data(data[0], m, eps),
+        fgsm_detector_data(data[1], m, eps),
+    )
+    detector = model.Detector(detector_data[0][0][0]).to(data[0][0].device)
+    if load_name is not None:
+        model.load(detector, load_name)
+    else:
+        LSUV_(detector, detector_data[0][0][:2000])
+    train_model(detector, detector_data, "detect")
+
+
 def git_commit():
     repo = git.Repo()
     if repo.active_branch.name == "main":  # Don't clutter the main branch.
@@ -71,12 +84,4 @@ if __name__ == "__main__":
     # LSUV_(m, train_imgs[:2000])
     model.load(m, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
     # train_model(m, data, 'pool20k')
-
-    detector_data = (
-        fgsm_detector_data(data[0], m, eps=0.2),
-        fgsm_detector_data(data[1], m, eps=0.2),
-    )
-    detector = model.Detector(detector_data[0][0][0]).to(device)
-    LSUV_(detector, detector_data[0][0][:2000])
-    # model.load(detector, 'detect5-9f9acdd513fd4da6920d657a85c392f01297daca.pt')
-    train_model(detector, detector_data, "detect")
+    # train_detector(m, data)

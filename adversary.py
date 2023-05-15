@@ -25,7 +25,7 @@ def fgsm_detector_data(data_pair, trained_model, eps):
 
     data_pair: Original dataset images and labels
     trained_model: Model to classify original dataset
-    eps: FGSM eps to use when generating new dataset
+    eps: FGSM epsilon to use when generating new dataset
 
     returns: detector_imgs, detector_labels
              Detector label is 1 if the image is adversarial and 0 otherwise.
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     )
     plot_distr_overlap(prs_original_adv, prs_adv_adv)
 
-    for threshold in [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 0.9, 0.95, 0.99, 0.995, 0.999]:
+    for threshold in [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.05, 0.99, 0.995, 0.999]:
         print(
             f"Detector accuracy on original images with threshold {threshold}:",
             torch.sum(prs_original_adv < threshold) / len(imgs),
@@ -178,5 +178,7 @@ if __name__ == "__main__":
             torch.sum(prs_adv_adv > threshold) / len(imgs),
         )
 
-# Can detect 90% of adversarial images while classifying 90% of normal images correctly, or
-# detect 50% of adversarial images while classifying 99.5% of normal images correctly.
+# Fully connected detector taking just the raw image as input can detect 90% of adversarial images
+# while classifying 90% of normal images correctly, or detect 50% of adversarial images while
+# classifying 99.5% of normal images correctly. Detecting 99% of adversarial images would mean
+# classifying only 3% of normal images correctly.
