@@ -62,6 +62,10 @@ def train_detector(trained_model, data, load_name=None, eps=0.2):
     train_model(detector, detector_data, "detect")
 
 
+def train_nic(trained_model, data):
+    nic_data = trained_model.layers(data[0][0])
+
+
 def git_commit():
     repo = git.Repo()
     if repo.active_branch.name == "main":  # Don't clutter the main branch.
@@ -85,3 +89,4 @@ if __name__ == "__main__":
     model.load(m, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
     # train_model(m, data, 'pool20k')
     # train_detector(m, data)
+    train_nic(m, data)
