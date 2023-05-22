@@ -6,6 +6,7 @@ from sklearn.linear_model import SGDOneClassSVM
 import model
 
 
+# TODO: Leaky hinge loss or some other way to increase accuracy on basic triangle example?
 def hinge_loss(outputs, margin):
     return torch.clamp(margin - outputs, min=0).mean()
 
@@ -23,13 +24,11 @@ def train_one_class(svm, train_inputs, valid_inputs):
     valid_inputs: Validation inputs; no labels since one-class
     """
 
-    # Higher margin/lower nu/no_false_negatives=True --> greater importance of
-    # including positive examples
-    no_false_negatives = True
-    nu = 0.5  # In (0; 1].
-    margin = 0
+    # Higher margin/lower nu --> greater importance of including positive examples
+    nu = 0.5  # In [0; 1].
+    margin = 1
     batch_size = 150
-    n_epochs = 1000
+    n_epochs = 100
     lr = 1e-1
 
     svm.train()
@@ -46,12 +45,12 @@ def train_one_class(svm, train_inputs, valid_inputs):
         optimizer.step()
 
         with torch.no_grad():
-            # Replicates sklearn OneClassSVM
-            svm.bias -= lr * 2 * alpha
-            svm.coefs *= max(0.0, 1 - lr * alpha)
+            if alpha > 0:  # Replicates sklearn OneClassSVM
+                svm.bias -= lr * 2 * alpha
+                svm.coefs *= max(0.0, 1 - lr * alpha)
 
         # `< batch_size` instead of `== 0`, because might not be exactly 0
-        if i_input % (len(train_inputs) * 100) < batch_size:
+        if i_input % 19999 < batch_size:
             with torch.no_grad():
                 print(f"{i_input//1000}k inputs processed, batch loss {loss.item()}")
 
@@ -59,10 +58,10 @@ def train_one_class(svm, train_inputs, valid_inputs):
                 valid_outputs = svm(valid_inputs)
                 print(
                     "Validation accuracy",
-                    torch.sum(valid_outputs > 0.0) / len(valid_outputs),
+                    (torch.sum(valid_outputs > 0.0) / len(valid_outputs)).round(decimals=3).item()
                 )
 
-                valid_loss = hinge_loss(valid_outputs, margin)
+                valid_loss = hinge_loss(valid_outputs, margin).round(decimals=3).item()
                 print("Validation loss", valid_loss)
                 if valid_loss <= min_valid_loss:
                     if min_valid_loss < float("inf"):
@@ -71,16 +70,17 @@ def train_one_class(svm, train_inputs, valid_inputs):
                     min_valid_loss = valid_loss
 
                 svm.train()
+    svm.eval()
 
+
+def postprocess_one_class(svm, positive_train_inputs, no_false_negatives=True):
     with torch.no_grad():
         if no_false_negatives:
-            # Adjust bias by choosing minimum output on positive training examples.
+            # Adjust bias by choosing minimum output that avoids false negatives.
             min_output_should_be = 0.01
-            svm.bias += min_output_should_be - svm(train_inputs).min()
-        else:  # No false positives
+            svm.bias += min_output_should_be - svm(positive_train_inputs).min()
+        else:
             svm.bias -= 1  # Replicates sklearn OneClassSVM
-
-    svm.eval()
 
 
 def circles_data(n_points, device):
@@ -98,7 +98,23 @@ def triangle_data(n_points, device):
     return inputs, labels
 
 
-def plot_results(inputs, labels, outputs, title):
+def print_results(labels, outputs, model_name):
+    print(
+        f"{model_name} validation accuracy",
+        np.count_nonzero(outputs == labels) / len(labels)
+    )
+    neg = np.logical_not(labels)
+    print(
+        f"{model_name} validation false positives (as fraction of negative examples)",
+        np.count_nonzero(outputs[neg]) / np.count_nonzero(neg)
+    )
+    print(
+        f"{model_name} validation false negatives (as fraction of positive examples)",
+        np.count_nonzero(np.logical_not(outputs[labels])) / np.count_nonzero(labels)
+    )
+
+
+def plot_results(inputs, labels, outputs, model_name):
     pos = labels
     neg = np.logical_not(labels)
     pos_output = outputs > 0.0
@@ -110,7 +126,7 @@ def plot_results(inputs, labels, outputs, title):
     neg_neg_output = inputs[neg & neg_output]
 
     _, ax = plt.subplots()
-    ax.set_title(title + " (marker=label, color=output)")
+    ax.set_title(model_name + " (marker=label, color=output)")
 
     # plt.scatter(inputs[:, 0], inputs[:, 1], marker=',', c='black')
     plt.scatter(pos_pos_output[:, 0], pos_pos_output[:, 1], marker="+", c="green")
@@ -122,7 +138,7 @@ def plot_results(inputs, labels, outputs, title):
 if __name__ == "__main__":
     device = "cuda"
 
-    (inputs, labels), n_train = circles_data(1000, device), 500
+    (inputs, labels), n_train = circles_data(10000, device), 5000
     inputs -= inputs.mean(dim=0, keepdim=True)
 
     train_inputs, train_labels = inputs[:n_train], labels[:n_train]
@@ -134,19 +150,25 @@ if __name__ == "__main__":
 
     torch_svm = model.SVM(train_inputs[0], 2).to(device)
     train_one_class(torch_svm, pos_train_inputs, pos_valid_inputs)
-    # model.load(torch_svm, 'svm-84c77a1383308746702e10b3b5c57b9cd4587fc7.pt')
+    model.load(torch_svm, 'svm-84c77a1383308746702e10b3b5c57b9cd4587fc7.pt')
+    postprocess_one_class(torch_svm, pos_train_inputs, no_false_negatives=False)
     print(*torch_svm.named_parameters())
 
     sk_svm = SGDOneClassSVM()
-    sk_svm.fit(pos_train_inputs.detach().cpu().numpy())
-    print("sk coefs", sk_svm.coef_)
-    print("sk bias (== -offset)", -sk_svm.offset_)
+    if sk_svm is not None:
+        sk_svm.fit(pos_train_inputs.detach().cpu().numpy())
+        print("sk coefs", sk_svm.coef_)
+        print("sk bias (== -offset)", -sk_svm.offset_)
 
     with torch.no_grad():
-        torch_valid_outputs = (torch_svm(valid_inputs) > 0.0).detach().cpu().numpy()
+        torch_valid_outputs = (torch_svm(valid_inputs) > 0).detach().cpu().numpy()
         valid_inputs = valid_inputs.detach().cpu().numpy()
         valid_labels = valid_labels.detach().cpu().numpy()
-        sk_valid_outputs = sk_svm.predict(valid_inputs) > 0
-        plot_results(valid_inputs, valid_labels, torch_valid_outputs, "torch")
-        plot_results(valid_inputs, valid_labels, sk_valid_outputs, "sk")
-        plt.show()
+        print_results(valid_labels, torch_valid_outputs, "torch")
+        # plot_results(valid_inputs, valid_labels, torch_valid_outputs, "torch")
+
+        if sk_svm is not None:
+            sk_valid_outputs = sk_svm.predict(valid_inputs) > 0
+            print_results(valid_labels, sk_valid_outputs, "sk")
+            # plot_results(valid_inputs, valid_labels, sk_valid_outputs, "sk")
+        # plt.show()
