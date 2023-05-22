@@ -21,9 +21,11 @@ def train_one_class(svm, train_inputs, valid_inputs):
     valid_inputs: Validation inputs; no labels since one-class
     """
 
-    # Higher margin/lower nu --> greater importance of including positive examples
-    nu = 0.5
-    margin = 1
+    # Higher margin/lower nu/no_false_negatives=True --> greater importance of
+    # including positive examples
+    no_false_negatives = True
+    nu = 0.5  # In (0; 1].
+    margin = 0
     batch_size = 150
     n_epochs = 1000
     lr = 1e-1
@@ -42,7 +44,7 @@ def train_one_class(svm, train_inputs, valid_inputs):
         optimizer.step()
 
         with torch.no_grad():
-            # Based on sklearn implementation
+            # Replicates sklearn OneClassSVM
             svm.bias -= lr * 2 * alpha
             svm.coefs *= max(0.0, 1 - lr * alpha)
 
@@ -68,12 +70,13 @@ def train_one_class(svm, train_inputs, valid_inputs):
 
                 svm.train()
 
-    # Adjust bias by choosing minimum output on positive training examples.
     with torch.no_grad():
-        # min_output = svm(train_inputs).min()
-        # should_be_min = 0.01
-        # svm.bias += should_be_min - min_output
-        svm.bias -= 1  # Replicates sklearn
+        if no_false_negatives:
+            # Adjust bias by choosing minimum output on positive training examples.
+            min_output_should_be = 0.01
+            svm.bias += min_output_should_be - svm(train_inputs).min()
+        else:  # No false positives
+            svm.bias -= 1  # Replicates sklearn OneClassSVM
 
     svm.eval()
 
@@ -117,7 +120,7 @@ def plot_results(inputs, labels, outputs, title):
 if __name__ == "__main__":
     device = "cuda"
 
-    (inputs, labels), n_train = triangle_data(1000, device), 500
+    (inputs, labels), n_train = circles_data(1000, device), 500
     inputs -= inputs.mean(dim=0, keepdim=True)
 
     train_inputs, train_labels = inputs[:n_train], labels[:n_train]
