@@ -57,7 +57,7 @@ class PoolNet(nn.Module):
         return self.fully_connected(self.convs(img_batch))
 
     def layers(self, img_batch):
-        '''Returns activations of hidden layers along with the output'''
+        """Returns activations of hidden layers along with the output"""
         layers = [self.convs(img_batch)]
 
         fc = list(self.fully_connected.modules())
@@ -103,8 +103,14 @@ class DistanceSVM(nn.Module):
 
     def forward(self, inputs):
         inputs = torch.flatten(inputs, 1)  # n_inputs, input_numel
-        size = (len(inputs), len(self.centers), len(inputs[0]))  # n_inputs, n_centers, input_numel
-        diffs = inputs.unsqueeze(1).expand(size) - self.centers.unsqueeze(0).expand(size)
+        size = (
+            len(inputs),
+            len(self.centers),
+            len(inputs[0]),
+        )  # n_inputs, n_centers, input_numel
+        diffs = inputs.unsqueeze(1).expand(size) - self.centers.unsqueeze(0).expand(
+            size
+        )
         distances = diffs.pow(2).sum(-1).sqrt()  # n_inputs, n_centers
 
         # Only relative magnitudes of coefficients matter, not absolute magnitudes
@@ -121,59 +127,40 @@ class DistanceSVM(nn.Module):
         return torch.clamp(self.max_avg_distance, min=0.0)
 
 
-class DensitySVM(nn.Module):
-    # Gaussian RBF
+class SVM(nn.Module):
     def __init__(self, example_input, n_centers):
         super().__init__()
-
-        # Approximate support vectors
-        self.centers = nn.Parameter(torch.randn(n_centers, example_input.numel()))
-
-        # Relative importances of centers
         self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
-
-        # The distributions around centers become wider and flatter as `scale` increases.
-        # This parameter is called `gamma` in scikit-learn and libsvm.
-        self.scale = nn.Parameter(torch.Tensor([1.0 / example_input.numel()]))
-
-        # If an input is less probable than `min_avg_density`, then the input is outside the learned
-        # distribution, i.e. classified as negative.
-        self.min_avg_density = nn.Parameter(torch.Tensor([0.5]))
+        self.bias = nn.Parameter(torch.Tensor([0.0]))
 
     def forward(self, inputs):
-        square_distances = pairwise_square_L2(inputs, self.centers)
-        
-
-        # Only relative magnitudes of coefficients matter, not absolute magnitudes
-        coefs = self.coefs.abs()
-        coef_sum = coefs.sum()
-        coefs = coefs if coef_sum.item() == 0.0 else coefs / coef_sum
-
-        weighted_avg_densities = torch.mv(densities, coefs)  # n_inputs
-        return weighted_avg_densities - self.min_avg_density
+        return torch.mv(inputs, self.coefs) + self.bias
 
     def regularization_loss(self):
-        # Maximize `min_avg_density`, so that the area inside the learned distribution is as small
-        # as possible.
-        return -torch.clamp(self.min_avg_density, max=1.0)
+        return self.coefs.abs().sum() + 2 * self.bias
 
 
 def gaussian_kernel(inputs, centers, gamma):
-    '''Square L2 distance between each input and each center'''
+    """Square L2 distance between each input and each center"""
     inputs = torch.flatten(inputs, 1)  # n_inputs, input_numel
-    size = (len(inputs), len(centers), inputs[0].numel())  # n_inputs, n_centers, input_numel
+    size = (
+        len(inputs),
+        len(centers),
+        inputs[0].numel(),
+    )  # n_inputs, n_centers, input_numel
     diffs = inputs.unsqueeze(1).expand(size) - centers.unsqueeze(0).expand(size)
-    square_distances = diffs.pow(2).sum(-1)   # n_inputs, n_centers
+    square_distances = diffs.pow(2).sum(-1)  # n_inputs, n_centers
     densities = torch.exp(-gamma * square_distances)  # n_inputs, n_centers
     return densities
 
 
 class Nystroem(nn.Module):
-    '''Approximate kernel by choosing (e.g. random) centers and then normalizing'''
+    """Approximate kernel by choosing (e.g. random) centers and then normalizing"""
+
     def __init__(self, n_centers):
         super().__init__()
         self.n_centers = n_centers
-        self.gamma = None    # TODO: Make this a `torch.Parameter`?
+        self.gamma = None  # TODO: Make this a `torch.Parameter`?
         self.centers = None
         self.normalization = None
 
@@ -184,21 +171,31 @@ class Nystroem(nn.Module):
 
 
 def train_nystroem(nystroem, train_inputs):  # TODO: kmeans=False
-    assert len(train_inputs) <= nystroem.n_centers, (len(train_inputs), nystroem.n_centers)
+    assert len(train_inputs) <= nystroem.n_centers, (
+        len(train_inputs),
+        nystroem.n_centers,
+    )
 
     with torch.no_grad():
         # TODO: if kmeans
-        center_indices = torch.randperm(len(train_inputs))[:nystroem.n_centers]
+        # Max number of kmeans iterations should be some constant + n_centers, e.g. n_centers+10.
+        # For example, imagine k clusters in a row (and n_centers=k) where we randomly selected 2
+        # points from the first cluster and no points from the last cluster before kmeans. It would
+        # take k iterations to get each point (i.e. each center) into a different cluster and then
+        # at least one more iteration to move the points to the midpoints of the clusters.
+        center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
         nystroem.centers = torch.flatten(train_inputs[center_indices], 1)
 
         n_features = train_inputs[0].numel()
         var = train_inputs.var().item()
-        nystroem.gamma = 1.0/(n_features * var) if var > 0.0 else 1.0/n_features
+        nystroem.gamma = 1.0 / (n_features * var) if var > 0.0 else 1.0 / n_features
 
         # TODO: Could we use a faster matrix decomposition instead of SVD, since `center_densities`
         #       is Hermitian?
-        center_densities = gaussian_kernel(nystroem.centers, nystroem.centers, nystroem.gamma)
-        u, s, vh = torch.linalg.svd(center_densities, driver='gesvd')
+        center_densities = gaussian_kernel(
+            nystroem.centers, nystroem.centers, nystroem.gamma
+        )
+        u, s, vh = torch.linalg.svd(center_densities, driver="gesvd")
         s = torch.clamp(s, min=1e-12)
         nystroem.normalization = torch.mm(u / s.sqrt(), vh).t()
 
