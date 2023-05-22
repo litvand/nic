@@ -29,7 +29,9 @@ def train_model(m, data, name):
         loss.backward()
         optimizer.step()
 
-        if i_img % 20000 < batch_size:  # <batch_size instead of ==0 because might not be exactly 0
+        if (
+            i_img % 20000 < batch_size
+        ):  # <batch_size instead of ==0 because might not be exactly 0
             with torch.no_grad():
                 print(f"{i_img//1000}k images processed, batch loss {loss.item()}")
                 print_accuracy("Training batch accuracy", batch_outputs, batch_labels)

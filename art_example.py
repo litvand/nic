@@ -84,7 +84,9 @@ if __name__ == "__main__":
     # Step 5: Evaluate the ART classifier on benign test examples
 
     predictions = classifier.predict(x_test)
-    accuracy = np.sum(np.argmax(predictions, axis=1) == np.argmax(y_test, axis=1)) / len(y_test)
+    accuracy = np.sum(
+        np.argmax(predictions, axis=1) == np.argmax(y_test, axis=1)
+    ) / len(y_test)
     print("Accuracy on benign test examples: {}%".format(accuracy * 100))
 
     # Step 6: Generate adversarial test examples
@@ -103,5 +105,7 @@ if __name__ == "__main__":
     # Step 7: Evaluate the ART classifier on adversarial test examples
 
     predictions = classifier.predict(x_test_adv)
-    accuracy = np.sum(np.argmax(predictions, axis=1) == np.argmax(y_test, axis=1)) / len(y_test)
+    accuracy = np.sum(
+        np.argmax(predictions, axis=1) == np.argmax(y_test, axis=1)
+    ) / len(y_test)
     print("Accuracy on adversarial test examples: {}%".format(accuracy * 100))
