@@ -12,9 +12,11 @@ def hinge_loss(outputs, margin):
 
 def train_one_class(svm, train_inputs, valid_inputs):
     """
-    Trains SVM to output 1 for all training inputs, while minimizing regularization loss.
+    Trains SVM to give a positive output for all training inputs, while minimizing the total set
+    of inputs for which its output is positive.
 
-    Gradient descent version of "Support Vector Method for Novelty Detection", Platt et al, 1999
+    Gradient descent version of "Support Vector Method for Novelty Detection", Platt et al, 1999.
+    Replicates sklearn OneClassSVM given same parameters.
 
     svm: SVM to train
     train_inputs: Training inputs; no labels since one-class
