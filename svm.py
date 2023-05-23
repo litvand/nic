@@ -1,9 +1,39 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from sklearn.linear_model import SGDOneClassSVM
+from sklearn.svm import OneClassSVM
 
 import model
+
+
+def train_nystroem(nystroem, train_inputs):  # TODO: kmeans=False
+    assert nystroem.n_centers <= len(train_inputs), (
+        len(train_inputs),
+        nystroem.n_centers,
+    )
+
+    with torch.no_grad():
+        # TODO: if kmeans
+        # Max number of kmeans iterations should be some constant + n_centers, e.g. n_centers+10.
+        # For example, imagine k clusters in a row (and n_centers=k) where we randomly selected 2
+        # points from the first cluster and no points from the last cluster before kmeans. It would
+        # take k iterations to get each point (i.e. each center) into a different cluster and then
+        # at least one more iteration to move the points to the midpoints of the clusters.
+        center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
+        nystroem.centers.copy_(train_inputs[center_indices].flatten(1))
+
+        n_features = train_inputs[0].numel()
+        var = train_inputs.var().item()
+        nystroem.gamma[0] = 1 / (n_features * var) if var > 0 else 1 / n_features
+
+        # TODO: Could we use a faster matrix decomposition instead of SVD, since `center_densities`
+        #       is Hermitian?
+        center_densities = model.gaussian_kernel(
+            nystroem.centers, nystroem.centers, nystroem.gamma
+        )
+        u, s, vh = torch.linalg.svd(center_densities, driver="gesvd")
+        s = torch.clamp(s, min=1e-12)
+        nystroem.normalization.copy_(torch.mm(u / s.sqrt(), vh).t())
 
 
 # TODO: Leaky hinge loss or some other way to increase accuracy on basic triangle example?
@@ -20,9 +50,12 @@ def train_one_class(svm, train_inputs, valid_inputs):
     Replicates sklearn OneClassSVM given same parameters.
 
     svm: SVM to train
-    train_inputs: Training inputs; no labels since one-class
-    valid_inputs: Validation inputs; no labels since one-class
+    train_inputs: Positive training inputs; no labels since one class
+    valid_inputs: Positive validation inputs; no labels since one class
     """
+
+    if svm.nystroem is not None:
+        train_nystroem(svm.nystroem, train_inputs)
 
     # Higher margin/lower nu --> greater importance of including positive examples
     nu = 0.5  # In [0; 1].
@@ -58,7 +91,9 @@ def train_one_class(svm, train_inputs, valid_inputs):
                 valid_outputs = svm(valid_inputs)
                 print(
                     "Validation accuracy",
-                    (torch.sum(valid_outputs > 0.0) / len(valid_outputs)).round(decimals=3).item()
+                    (torch.sum(valid_outputs > 0.0) / len(valid_outputs))
+                    .round(decimals=3)
+                    .item(),
                 )
 
                 valid_loss = hinge_loss(valid_outputs, margin).round(decimals=3).item()
@@ -101,16 +136,16 @@ def triangle_data(n_points, device):
 def print_results(labels, outputs, model_name):
     print(
         f"{model_name} validation accuracy",
-        np.count_nonzero(outputs == labels) / len(labels)
+        np.count_nonzero(outputs == labels) / len(labels),
     )
     neg = np.logical_not(labels)
     print(
         f"{model_name} validation false positives (as fraction of negative examples)",
-        np.count_nonzero(outputs[neg]) / np.count_nonzero(neg)
+        np.count_nonzero(outputs[neg]) / np.count_nonzero(neg),
     )
     print(
         f"{model_name} validation false negatives (as fraction of positive examples)",
-        np.count_nonzero(np.logical_not(outputs[labels])) / np.count_nonzero(labels)
+        np.count_nonzero(np.logical_not(outputs[labels])) / np.count_nonzero(labels),
     )
 
 
@@ -139,36 +174,36 @@ if __name__ == "__main__":
     device = "cuda"
 
     (inputs, labels), n_train = circles_data(10000, device), 5000
-    inputs -= inputs.mean(dim=0, keepdim=True)
-
     train_inputs, train_labels = inputs[:n_train], labels[:n_train]
     valid_inputs, valid_labels = inputs[n_train:], labels[n_train:]
-    pos_train_inputs, pos_valid_inputs = (
+    train_inputs, pos_valid_inputs = (  # No negative training inputs
         train_inputs[train_labels],
         valid_inputs[valid_labels],
     )
+    inputs -= train_inputs.mean(0, keepdim=True)
+    inputs /= train_inputs.std(0, keepdim=True)
 
-    torch_svm = model.SVM(train_inputs[0], 2).to(device)
-    train_one_class(torch_svm, pos_train_inputs, pos_valid_inputs)
-    model.load(torch_svm, 'svm-84c77a1383308746702e10b3b5c57b9cd4587fc7.pt')
-    postprocess_one_class(torch_svm, pos_train_inputs, no_false_negatives=False)
+    torch_svm = model.SVM(train_inputs[0], 10, rbf=True).to(device)
+    train_one_class(torch_svm, train_inputs, pos_valid_inputs)
+    model.load(torch_svm, "svm-6a1e264b2f0fb244efbaad186028756c95d3beaf.pt")
+    postprocess_one_class(torch_svm, train_inputs, no_false_negatives=False)
     print(*torch_svm.named_parameters())
 
-    sk_svm = SGDOneClassSVM()
+    sk_svm = OneClassSVM(kernel="rbf")
     if sk_svm is not None:
-        sk_svm.fit(pos_train_inputs.detach().cpu().numpy())
-        print("sk coefs", sk_svm.coef_)
-        print("sk bias (== -offset)", -sk_svm.offset_)
+        sk_svm.fit(train_inputs.detach().cpu().numpy())
+        # print("sk coefs", sk_svm.coef_)
+        # print("sk bias (== -offset)", -sk_svm.offset_)
 
     with torch.no_grad():
         torch_valid_outputs = (torch_svm(valid_inputs) > 0).detach().cpu().numpy()
         valid_inputs = valid_inputs.detach().cpu().numpy()
         valid_labels = valid_labels.detach().cpu().numpy()
         print_results(valid_labels, torch_valid_outputs, "torch")
-        # plot_results(valid_inputs, valid_labels, torch_valid_outputs, "torch")
+        plot_results(valid_inputs, valid_labels, torch_valid_outputs, "torch")
 
         if sk_svm is not None:
             sk_valid_outputs = sk_svm.predict(valid_inputs) > 0
             print_results(valid_labels, sk_valid_outputs, "sk")
-            # plot_results(valid_inputs, valid_labels, sk_valid_outputs, "sk")
-        # plt.show()
+            plot_results(valid_inputs, valid_labels, sk_valid_outputs, "sk")
+        plt.show()

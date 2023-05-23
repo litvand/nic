@@ -86,60 +86,6 @@ class Detector(nn.Module):
         return self.seq(img_batch)
 
 
-class DistanceSVM(nn.Module):
-    # Linear RBF
-    def __init__(self, example_input, n_centers):
-        super().__init__()
-
-        # Approximate support vectors
-        self.centers = nn.Parameter(torch.randn(n_centers, example_input.numel()))
-
-        # Relative importances of centers
-        self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
-
-        # If an input is farther from centers than `max_avg_distance`, then the input is outside the
-        # learned distribution, i.e. classified as negative.
-        self.max_avg_distance = nn.Parameter(torch.ones(1))
-
-    def forward(self, inputs):
-        inputs = torch.flatten(inputs, 1)  # n_inputs, input_numel
-        size = (
-            len(inputs),
-            len(self.centers),
-            len(inputs[0]),
-        )  # n_inputs, n_centers, input_numel
-        diffs = inputs.unsqueeze(1).expand(size) - self.centers.unsqueeze(0).expand(
-            size
-        )
-        distances = diffs.pow(2).sum(-1).sqrt()  # n_inputs, n_centers
-
-        # Only relative magnitudes of coefficients matter, not absolute magnitudes
-        coefs = self.coefs.abs()
-        coef_sum = coefs.sum()
-        coefs = coefs if coef_sum.item() == 0.0 else coefs / coef_sum
-
-        weighted_avg_distances = torch.mv(distances, coefs)  # n_inputs
-        return self.max_avg_distance - weighted_avg_distances
-
-    def regularization_loss(self):
-        # Minimize `max_avg_distance`, so that the area inside the learned distribution is as small
-        # as possible.
-        return torch.clamp(self.max_avg_distance, min=0.0)
-
-
-class SVM(nn.Module):
-    def __init__(self, example_input, n_centers):
-        super().__init__()
-        self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
-        self.bias = nn.Parameter(torch.Tensor([0.0]))
-
-    def forward(self, inputs):
-        return torch.mv(inputs, self.coefs) + self.bias
-
-    def regularization_loss(self):
-        return self.coefs.abs().sum() + 2 * self.bias
-
-
 def gaussian_kernel(inputs, centers, gamma):
     """Square L2 distance between each input and each center"""
     inputs = torch.flatten(inputs, 1)  # n_inputs, input_numel
@@ -157,12 +103,16 @@ def gaussian_kernel(inputs, centers, gamma):
 class Nystroem(nn.Module):
     """Approximate kernel by choosing (e.g. random) centers and then normalizing"""
 
-    def __init__(self, n_centers):
+    def __init__(self, example_input, n_centers):
         super().__init__()
         self.n_centers = n_centers
-        self.gamma = None  # TODO: Make this a `torch.Parameter`?
-        self.centers = None
-        self.normalization = None
+        self.gamma = nn.Parameter(torch.empty(1), requires_grad=False)
+        self.centers = nn.Parameter(
+            torch.empty(n_centers, example_input.numel()), requires_grad=False
+        )
+        self.normalization = nn.Parameter(
+            torch.empty(n_centers, n_centers), requires_grad=False
+        )
 
     def forward(self, inputs):
         densities = gaussian_kernel(inputs, self.centers, self.gamma)
@@ -170,34 +120,17 @@ class Nystroem(nn.Module):
         return normalized
 
 
-def train_nystroem(nystroem, train_inputs):  # TODO: kmeans=False
-    assert len(train_inputs) <= nystroem.n_centers, (
-        len(train_inputs),
-        nystroem.n_centers,
-    )
+class SVM(nn.Module):
+    def __init__(self, example_input, n_centers, rbf=False):
+        super().__init__()
+        self.nystroem = Nystroem(example_input, n_centers) if rbf else None
+        self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
+        self.bias = nn.Parameter(torch.Tensor([0.0]))
 
-    with torch.no_grad():
-        # TODO: if kmeans
-        # Max number of kmeans iterations should be some constant + n_centers, e.g. n_centers+10.
-        # For example, imagine k clusters in a row (and n_centers=k) where we randomly selected 2
-        # points from the first cluster and no points from the last cluster before kmeans. It would
-        # take k iterations to get each point (i.e. each center) into a different cluster and then
-        # at least one more iteration to move the points to the midpoints of the clusters.
-        center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
-        nystroem.centers = torch.flatten(train_inputs[center_indices], 1)
-
-        n_features = train_inputs[0].numel()
-        var = train_inputs.var().item()
-        nystroem.gamma = 1.0 / (n_features * var) if var > 0.0 else 1.0 / n_features
-
-        # TODO: Could we use a faster matrix decomposition instead of SVD, since `center_densities`
-        #       is Hermitian?
-        center_densities = gaussian_kernel(
-            nystroem.centers, nystroem.centers, nystroem.gamma
-        )
-        u, s, vh = torch.linalg.svd(center_densities, driver="gesvd")
-        s = torch.clamp(s, min=1e-12)
-        nystroem.normalization = torch.mm(u / s.sqrt(), vh).t()
+    def forward(self, inputs):
+        if self.nystroem is not None:
+            inputs = self.nystroem(inputs)
+        return torch.mv(inputs, self.coefs) + self.bias
 
 
 def save(model, model_name):
