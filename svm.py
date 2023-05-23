@@ -1,26 +1,33 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from kmeans_pytorch import kmeans
 from sklearn.svm import OneClassSVM
 
 import model
 
 
-def train_nystroem(nystroem, train_inputs):  # TODO: kmeans=False
+def train_nystroem(nystroem, train_inputs):
     assert nystroem.n_centers <= len(train_inputs), (
         len(train_inputs),
         nystroem.n_centers,
     )
 
     with torch.no_grad():
-        # TODO: if kmeans
-        # Max number of kmeans iterations should be some constant + n_centers, e.g. n_centers+10.
-        # For example, imagine k clusters in a row (and n_centers=k) where we randomly selected 2
-        # points from the first cluster and no points from the last cluster before kmeans. It would
-        # take k iterations to get each point (i.e. each center) into a different cluster and then
-        # at least one more iteration to move the points to the midpoints of the clusters.
-        center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
-        nystroem.centers.copy_(train_inputs[center_indices].flatten(1))
+        if nystroem.kmeans:
+            # Max number of kmeans iterations should be some constant + n_centers, e.g.
+            # n_centers+10. For example, imagine k clusters in a row (and n_centers=k) where we
+            # randomly selected 2 points from the first cluster and no points from the last cluster
+            # before kmeans. It would take k iterations to get each point (i.e. each center) into a
+            # different cluster and then at least one more iteration to move the points to the
+            # midpoints of the clusters.
+            _, centers = kmeans(train_inputs, nystroem.n_centers, device=train_inputs.device)
+        else:
+            # Choose random centers without replacement
+            center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
+            centers = train_inputs[center_indices].flatten(1)
+
+        nystroem.centers.copy_(centers)
 
         n_features = train_inputs[0].numel()
         var = train_inputs.var().item()
@@ -183,9 +190,9 @@ if __name__ == "__main__":
     inputs -= train_inputs.mean(0, keepdim=True)
     inputs /= train_inputs.std(0, keepdim=True)
 
-    torch_svm = model.SVM(train_inputs[0], 10, rbf=True).to(device)
+    torch_svm = model.SVM(train_inputs[0], 2).to(device)
     train_one_class(torch_svm, train_inputs, pos_valid_inputs)
-    model.load(torch_svm, "svm-6a1e264b2f0fb244efbaad186028756c95d3beaf.pt")
+    model.load(torch_svm, "svm-02a0efb68bc495bdab96b7b90cff2504034cc587.pt")
     postprocess_one_class(torch_svm, train_inputs, no_false_negatives=False)
     print(*torch_svm.named_parameters())
 

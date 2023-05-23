@@ -101,10 +101,16 @@ def gaussian_kernel(inputs, centers, gamma):
 
 
 class Nystroem(nn.Module):
-    """Approximate kernel by choosing (e.g. random) centers and then normalizing"""
+    """
+    Approximate a kernel by choosing (random or kmeans) centers and then normalizing.
 
-    def __init__(self, example_input, n_centers):
+    Currently the kernel is Gaussian, but other kernels are also possible.
+    """
+
+    def __init__(self, example_input, n_centers, kmeans):
         super().__init__()
+        # Use kmeans to choose centers. Generally n_centers needs to be larger if kmeans=False.
+        self.kmeans = kmeans
         self.n_centers = n_centers
         self.gamma = nn.Parameter(torch.empty(1), requires_grad=False)
         self.centers = nn.Parameter(
@@ -121,9 +127,9 @@ class Nystroem(nn.Module):
 
 
 class SVM(nn.Module):
-    def __init__(self, example_input, n_centers, rbf=False):
+    def __init__(self, example_input, n_centers, rbf=True, kmeans=True):
         super().__init__()
-        self.nystroem = Nystroem(example_input, n_centers) if rbf else None
+        self.nystroem = Nystroem(example_input, n_centers, kmeans) if rbf else None
         self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
         self.bias = nn.Parameter(torch.Tensor([0.0]))
 
