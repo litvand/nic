@@ -21,7 +21,9 @@ def train_nystroem(nystroem, train_inputs):
             # before kmeans. It would take k iterations to get each point (i.e. each center) into a
             # different cluster and then at least one more iteration to move the points to the
             # midpoints of the clusters.
-            _, centers = kmeans(train_inputs, nystroem.n_centers, device=train_inputs.device)
+            _, centers = kmeans(
+                train_inputs, nystroem.n_centers, device=train_inputs.device
+            )
         else:
             # Choose random centers without replacement
             center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
@@ -87,7 +89,7 @@ def train_one_class(svm, train_inputs, valid_inputs):
         with torch.no_grad():
             if alpha > 0:  # Replicates sklearn OneClassSVM
                 svm.bias -= lr * 2 * alpha
-                svm.coefs *= max(0.0, 1 - lr * alpha)
+                svm.coefs *= max(0, 1 - lr * alpha)
 
         # `< batch_size` instead of `== 0`, because might not be exactly 0
         if i_input % 19999 < batch_size:
@@ -98,7 +100,7 @@ def train_one_class(svm, train_inputs, valid_inputs):
                 valid_outputs = svm(valid_inputs)
                 print(
                     "Validation accuracy",
-                    (torch.sum(valid_outputs > 0.0) / len(valid_outputs))
+                    (torch.sum(valid_outputs > 0) / len(valid_outputs))
                     .round(decimals=3)
                     .item(),
                 )
@@ -128,8 +130,8 @@ def postprocess_one_class(svm, positive_train_inputs, no_false_negatives=True):
 def circles_data(n_points, device):
     inputs = torch.randn((n_points, 2), device=device) * 1.5
     # Torch optimizes `pow(b)` for integer b in (-32, 32)
-    labels = (inputs[:, 0] - 1.0).pow(2) + (inputs[:, 1] - 1.0).pow(2) < 0.5
-    labels = labels | ((inputs[:, 0] + 1.0).pow(2) + (inputs[:, 1] + 1.0).pow(2) < 0.5)
+    labels = (inputs[:, 0] - 1).pow(2) + (inputs[:, 1] - 1).pow(2) < 0.5
+    labels = labels | ((inputs[:, 0] + 1).pow(2) + (inputs[:, 1] + 1).pow(2) < 0.5)
     return inputs, labels
 
 
@@ -159,7 +161,7 @@ def print_results(labels, outputs, model_name):
 def plot_results(inputs, labels, outputs, model_name):
     pos = labels
     neg = np.logical_not(labels)
-    pos_output = outputs > 0.0
+    pos_output = outputs > 0
     neg_output = np.logical_not(pos_output)
 
     pos_pos_output = inputs[pos & pos_output]
