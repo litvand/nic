@@ -65,7 +65,8 @@ def train_detector(trained_model, data, load_name=None, eps=0.2):
 
 
 def train_nic(trained_model, data):
-    nic_data = trained_model.layers(data[0][0])
+    (train_imgs, _), (valid_imgs, _) = data
+    train_inputs = [train_imgs] + trained_model.activations(train_imgs)
 
 
 def git_commit():

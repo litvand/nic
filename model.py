@@ -5,6 +5,25 @@ from torch import nn
 N_CLASSES = 10
 
 
+def get_activations(input, sequential, module_indices):
+    """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
+
+    sequential = list(sequential.modules())
+    activations = []
+    for i_module, module in enumerate(sequential):
+        input = module(input)
+        # Support negative indices
+        if i_module in module_indices or i_module - len(sequential) in module_indices:
+            activations.append(input)
+
+    assert len(activations) == len(module_indices), (
+        activations,
+        sequential,
+        module_indices,
+    )
+    return activations
+
+
 class FullyConnected(nn.Module):
     def __init__(self, example_img):
         super().__init__()
@@ -19,6 +38,9 @@ class FullyConnected(nn.Module):
 
     def forward(self, img_batch):
         return self.seq(img_batch)
+
+    def activations(self, img_batch):
+        return get_activations(img_batch, self.seq, [3, 4])
 
 
 class PoolNet(nn.Module):
@@ -48,26 +70,21 @@ class PoolNet(nn.Module):
         print("Number of input features to fully connected layers:", n_fc_inputs)
         self.fully_connected = nn.Sequential(
             nn.Linear(n_fc_inputs, 200),
-            nn.BatchNorm1d(200),
             nn.GELU(),
+            nn.BatchNorm1d(200),
             nn.Linear(200, N_CLASSES),
         )
 
     def forward(self, img_batch):
         return self.fully_connected(self.convs(img_batch))
 
-    def layers(self, img_batch):
-        """Returns activations of hidden layers along with the output"""
-        layers = [self.convs(img_batch)]
-
-        fc = list(self.fully_connected.modules())
-        layers.append(fc[0](layers[-1]))
-
-        x = layers[-1]
-        for mod in fc[1:]:
-            x = mod(x)
-        layers.append(x)
-        return layers
+    def activations(self, img_batch):
+        """Returns activations of hidden layers before the output"""
+        activations = get_activations(img_batch, self.convs, [3, -1])
+        activations.extend(
+            get_activations(activations[-1], self.fully_connected, [2, 3])
+        )
+        return activations
 
 
 class Detector(nn.Module):
@@ -131,7 +148,7 @@ class SVM(nn.Module):
         super().__init__()
         self.nystroem = Nystroem(example_input, n_centers, kmeans) if rbf else None
         self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
-        self.bias = nn.Parameter(torch.Tensor([0.0]))
+        self.bias = nn.Parameter(torch.Tensor([0]))
 
     def forward(self, inputs):
         if self.nystroem is not None:
