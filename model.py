@@ -56,6 +56,19 @@ class PoolNet(nn.Module):
     def forward(self, img_batch):
         return self.fully_connected(self.convs(img_batch))
 
+    def layers(self, img_batch):
+        """Returns activations of hidden layers along with the output"""
+        layers = [self.convs(img_batch)]
+
+        fc = list(self.fully_connected.modules())
+        layers.append(fc[0](layers[-1]))
+
+        x = layers[-1]
+        for mod in fc[1:]:
+            x = mod(x)
+        layers.append(x)
+        return layers
+
 
 class Detector(nn.Module):
     def __init__(self, example_img):
@@ -71,6 +84,59 @@ class Detector(nn.Module):
 
     def forward(self, img_batch):
         return self.seq(img_batch)
+
+
+def gaussian_kernel(inputs, centers, gamma):
+    """Square L2 distance between each input and each center"""
+    inputs = torch.flatten(inputs, 1)  # n_inputs, input_numel
+    size = (
+        len(inputs),
+        len(centers),
+        inputs[0].numel(),
+    )  # n_inputs, n_centers, input_numel
+    diffs = inputs.unsqueeze(1).expand(size) - centers.unsqueeze(0).expand(size)
+    square_distances = diffs.pow(2).sum(-1)  # n_inputs, n_centers
+    densities = torch.exp(-gamma * square_distances)  # n_inputs, n_centers
+    return densities
+
+
+class Nystroem(nn.Module):
+    """
+    Approximate a kernel by choosing (random or kmeans) centers and then normalizing.
+
+    Currently the kernel is Gaussian, but other kernels are also possible.
+    """
+
+    def __init__(self, example_input, n_centers, kmeans):
+        super().__init__()
+        # Use kmeans to choose centers. Generally n_centers needs to be larger if kmeans=False.
+        self.kmeans = kmeans
+        self.n_centers = n_centers
+        self.gamma = nn.Parameter(torch.empty(1), requires_grad=False)
+        self.centers = nn.Parameter(
+            torch.empty(n_centers, example_input.numel()), requires_grad=False
+        )
+        self.normalization = nn.Parameter(
+            torch.empty(n_centers, n_centers), requires_grad=False
+        )
+
+    def forward(self, inputs):
+        densities = gaussian_kernel(inputs, self.centers, self.gamma)
+        normalized = torch.mm(densities, self.normalization)
+        return normalized
+
+
+class SVM(nn.Module):
+    def __init__(self, example_input, n_centers, rbf=True, kmeans=True):
+        super().__init__()
+        self.nystroem = Nystroem(example_input, n_centers, kmeans) if rbf else None
+        self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
+        self.bias = nn.Parameter(torch.Tensor([0.0]))
+
+    def forward(self, inputs):
+        if self.nystroem is not None:
+            inputs = self.nystroem(inputs)
+        return torch.mv(inputs, self.coefs) + self.bias
 
 
 def save(model, model_name):
