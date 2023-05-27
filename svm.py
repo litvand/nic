@@ -1,3 +1,4 @@
+from copy import deepcopy
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -15,12 +16,8 @@ def train_nystroem(nystroem, train_inputs):
 
     with torch.no_grad():
         if nystroem.kmeans:
-            # Max number of kmeans iterations should be some constant + n_centers, e.g.
-            # n_centers+10. For example, imagine k clusters in a row (and n_centers=k) where we
-            # randomly selected 2 points from the first cluster and no points from the last cluster
-            # before kmeans. It would take k iterations to get each point (i.e. each center) into a
-            # different cluster and then at least one more iteration to move the points to the
-            # midpoints of the clusters.
+            # TODO: kmeans++
+            # TODO: sparse kmeans
             _, centers = kmeans(
                 train_inputs, nystroem.n_centers, device=train_inputs.device
             )
@@ -67,6 +64,7 @@ def train_one_class(svm, train_inputs, valid_inputs):
         train_nystroem(svm.nystroem, train_inputs)
 
     # Higher margin/lower nu --> greater importance of including positive examples
+    no_false_negatives = False
     nu = 0.5  # In [0; 1].
     margin = 1
     batch_size = 150
@@ -76,23 +74,21 @@ def train_one_class(svm, train_inputs, valid_inputs):
     svm.train()
     optimizer = torch.optim.SGD(svm.parameters(), lr=lr)
     alpha = nu / 2
+    assert lr * alpha <= 1, (lr, alpha)  # `lr * alpha > 1` breaks regularization.
     min_valid_loss = float("inf")
+    min_valid_state = svm.state_dict()
 
-    for i_input in range(0, n_epochs * len(train_inputs), batch_size):
+    n_total_inputs = n_epochs * len(train_inputs)
+    for i_input in range(0, n_total_inputs, batch_size):
         indices = torch.randint(high=len(train_inputs), size=(batch_size,))
         batch_outputs = svm(train_inputs[indices])
-        loss = hinge_loss(batch_outputs, margin)
+        loss = hinge_loss(batch_outputs, margin) + alpha * svm.regularization_loss()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        with torch.no_grad():
-            if alpha > 0:  # Replicates sklearn OneClassSVM
-                svm.bias -= lr * 2 * alpha
-                svm.coefs *= max(0, 1 - lr * alpha)
-
-        # `< batch_size` instead of `== 0`, because might not be exactly 0
-        if i_input % 19999 < batch_size:
+        # `% ... < batch_size` instead of `% ... == 0`, because might not be exactly 0
+        if i_input % 20000 < batch_size or i_input + batch_size >= n_total_inputs:
             with torch.no_grad():
                 print(f"{i_input//1000}k inputs processed, batch loss {loss.item()}")
 
@@ -100,31 +96,29 @@ def train_one_class(svm, train_inputs, valid_inputs):
                 valid_outputs = svm(valid_inputs)
                 print(
                     "Validation accuracy",
-                    (torch.sum(valid_outputs > 0) / len(valid_outputs))
-                    .round(decimals=3)
-                    .item(),
+                    round((torch.sum(valid_outputs > 0) / len(valid_outputs)).item(), 3),
                 )
 
-                valid_loss = hinge_loss(valid_outputs, margin).round(decimals=3).item()
-                print("Validation loss", valid_loss)
+                valid_loss = hinge_loss(valid_outputs, margin) + alpha * svm.regularization_loss()
+                print("Validation loss", round(valid_loss.item(), 3))
+                # TODO: Does early stopping make sense for one-class training?
                 if valid_loss <= min_valid_loss:
                     if min_valid_loss < float("inf"):
                         # Don't overwrite saved model if loss was just < infinity.
-                        model.save(svm, "svm")
+                        min_valid_state = deepcopy(svm.state_dict())
                     min_valid_loss = valid_loss
 
                 svm.train()
     svm.eval()
 
-
-def postprocess_one_class(svm, positive_train_inputs, no_false_negatives=True):
     with torch.no_grad():
+        svm.load_state_dict(min_valid_state)
         if no_false_negatives:
             # Adjust bias by choosing minimum output that avoids false negatives.
             min_output_should_be = 0.01
-            svm.bias += min_output_should_be - svm(positive_train_inputs).min()
+            svm.bias += min_output_should_be - svm(train_inputs).min()
         else:
-            svm.bias -= 1  # Replicates sklearn OneClassSVM
+            svm.bias -= margin  # Replicates sklearn OneClassSVM
 
 
 def circles_data(n_points, device):
@@ -185,17 +179,14 @@ if __name__ == "__main__":
     (inputs, labels), n_train = circles_data(10000, device), 5000
     train_inputs, train_labels = inputs[:n_train], labels[:n_train]
     valid_inputs, valid_labels = inputs[n_train:], labels[n_train:]
-    train_inputs, pos_valid_inputs = (  # No negative training inputs
-        train_inputs[train_labels],
-        valid_inputs[valid_labels],
-    )
+    train_inputs, pos_valid_inputs = train_inputs[train_labels], valid_inputs[valid_labels]
+    train_labels = None  # No negative training inputs
     inputs -= train_inputs.mean(0, keepdim=True)
     inputs /= train_inputs.std(0, keepdim=True)
 
     torch_svm = model.SVM(train_inputs[0], 2).to(device)
     train_one_class(torch_svm, train_inputs, pos_valid_inputs)
-    model.load(torch_svm, "svm-02a0efb68bc495bdab96b7b90cff2504034cc587.pt")
-    postprocess_one_class(torch_svm, train_inputs, no_false_negatives=False)
+    model.save(torch_svm, "svm")
     print(*torch_svm.named_parameters())
 
     sk_svm = OneClassSVM(kernel="rbf")

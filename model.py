@@ -5,7 +5,7 @@ from torch import nn
 N_CLASSES = 10
 
 
-def get_activations(input, sequential, module_indices):
+def activations_at(input, sequential, module_indices):
     """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
 
     sequential = list(sequential.modules())
@@ -40,7 +40,7 @@ class FullyConnected(nn.Module):
         return self.seq(img_batch)
 
     def activations(self, img_batch):
-        return get_activations(img_batch, self.seq, [3, 4])
+        return activations_at(img_batch, self.seq, [3, 4])
 
 
 class PoolNet(nn.Module):
@@ -80,9 +80,9 @@ class PoolNet(nn.Module):
 
     def activations(self, img_batch):
         """Returns activations of hidden layers before the output"""
-        activations = get_activations(img_batch, self.convs, [3, -1])
+        activations = activations_at(img_batch, self.convs, [3, -1])
         activations.extend(
-            get_activations(activations[-1], self.fully_connected, [2, 3])
+            activations_at(activations[-1], self.fully_connected, [2, 3])
         )
         return activations
 
@@ -119,9 +119,9 @@ def gaussian_kernel(inputs, centers, gamma):
 
 class Nystroem(nn.Module):
     """
-    Approximate a kernel by choosing (random or kmeans) centers and then normalizing.
+    Approximate a kernel by choosing (e.g. random/kmeans) centers and then normalizing.
 
-    Currently the kernel is Gaussian, but other kernels are also possible.
+    Currently the kernel is Gaussian, though other kernels are also possible.
     """
 
     def __init__(self, example_input, n_centers, kmeans):
@@ -154,6 +154,9 @@ class SVM(nn.Module):
         if self.nystroem is not None:
             inputs = self.nystroem(inputs)
         return torch.mv(inputs, self.coefs) + self.bias
+
+    def regularization_loss(self):
+        return 2 * self.bias + 0.5 * self.coefs.dot(self.coefs)
 
 
 def save(model, model_name):
