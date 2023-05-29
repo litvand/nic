@@ -1,3 +1,5 @@
+from importlib.metadata import requires
+from typing import Any
 import git
 import torch
 from torch import nn
@@ -5,16 +7,16 @@ from torch import nn
 N_CLASSES = 10
 
 
-def activations_at(input, sequential, module_indices):
+def activations_at(inputs, sequential, module_indices):
     """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
 
     sequential = list(sequential.modules())
     activations = []
     for i_module, module in enumerate(sequential):
-        input = module(input)
+        inputs = module(inputs)
         # Support negative indices
         if i_module in module_indices or i_module - len(sequential) in module_indices:
-            activations.append(input)
+            activations.append(inputs)
 
     assert len(activations) == len(module_indices), (
         activations,
@@ -124,17 +126,17 @@ class Nystroem(nn.Module):
     Currently the kernel is Gaussian, though other kernels are also possible.
     """
 
-    def __init__(self, example_input, n_centers, kmeans):
+    def __init__(self, example_input, n_centers, kmeans=True):
         super().__init__()
         # Use kmeans to choose centers. Generally n_centers needs to be larger if kmeans=False.
         self.kmeans = kmeans
         self.n_centers = n_centers
-        self.gamma = nn.Parameter(torch.empty(1), requires_grad=False)
+        self.gamma = nn.Parameter(torch.zeros(1), requires_grad=False)
         self.centers = nn.Parameter(
-            torch.empty(n_centers, example_input.numel()), requires_grad=False
+            torch.zeros(n_centers, example_input.numel()), requires_grad=False
         )
         self.normalization = nn.Parameter(
-            torch.empty(n_centers, n_centers), requires_grad=False
+            torch.zeros(n_centers, n_centers), requires_grad=False
         )
 
     def forward(self, inputs):
@@ -144,10 +146,10 @@ class Nystroem(nn.Module):
 
 
 class SVM(nn.Module):
-    def __init__(self, example_input, n_centers, rbf=True, kmeans=True):
+    def __init__(self, example_input, n_centers, rbf=True):
         super().__init__()
-        self.nystroem = Nystroem(example_input, n_centers, kmeans) if rbf else None
-        self.coefs = nn.Parameter(torch.rand(n_centers) / n_centers)
+        self.nystroem = Nystroem(example_input, n_centers) if rbf else None
+        self.coefs = nn.Parameter(torch.rand(n_centers) - 0.5)
         self.bias = nn.Parameter(torch.Tensor([0]))
 
     def forward(self, inputs):
@@ -155,8 +157,89 @@ class SVM(nn.Module):
             inputs = self.nystroem(inputs)
         return torch.mv(inputs, self.coefs) + self.bias
 
-    def regularization_loss(self):
-        return 2 * self.bias + 0.5 * self.coefs.dot(self.coefs)
+
+class Normalize(nn.Module):
+    def __init__(self, mean, std):
+        """
+        Normalize the mean and standard deviation
+
+        mean: Single number or mean of each channel (i.e. second dimension)
+        std: Single number or standard deviation of each channel (i.e. second dimension)
+        """
+
+        super().__init__()
+        self.mean = nn.Parameter(torch.tensor(mean), requires_grad=False)
+        self.inv_std = nn.Parameter(torch.tensor(1/std), requires_grad=False)
+
+    def forward(self, inputs):
+        size = [1] * inputs.ndim
+        size[1] = len(self.mean)
+        return (inputs - self.mean.view(size)) * self.inv_std.view(size)
+
+
+class Elemwise(nn.Module):
+    def __init__(self, modules):
+        super().__init__()
+        self.modules = modules
+
+    def forward(self, elems):
+        return [m(elem) for m, elem in zip(self.modules, elems)]
+
+
+def cat_layer_pairs(layers):
+    """
+    Concatenate features of each consecutive pair of layers.
+
+    Layers must be flattened, i.e. each layer's size must be (n_inputs, -1).
+
+    Returns list with `len(layers) - 1` elements.
+    """
+
+    cat_all = torch.cat(layers, dim=1)
+    with torch.no_grad():
+        n_layer_features = torch.Tensor([layer.size(1) for layer in layers])
+        ends = n_layer_features.cumsum()
+    return [
+        cat_all[:, ends[i] - n_layer_features[i]:ends[i+1]] for i in range(len(layers) - 1)
+    ]
+
+
+class NIC(nn.Module):
+    @staticmethod
+    def load(filename):
+        n = NIC(None, [], [], [], None, None)
+        load(n, filename)
+        return n
+
+    def __init__(
+        self,
+        trained_model,
+        layers_normalize,
+        value_svms,
+        provenance_svms,
+        density_normalize,
+        final_svm
+    ):
+        super().__init__()
+        self.trained_model = trained_model
+        self.layers_normalize = Elemwise(layers_normalize)
+        self.value_svms = Elemwise(value_svms)
+        self.provenance_svms = Elemwise(provenance_svms)
+        self.density_normalize = density_normalize
+        self.final_svm = final_svm
+
+    def forward(self, batch):
+        """
+        Higher output means a higher probability of the input image being within the training
+        distribution, i.e. non-adversarial.
+        """
+        layers = [batch] + self.trained_model.activations(batch)
+        layers = [layer.flatten(1) for layer in self.layers_normalize(layers)]
+        value_densities = self.value_svms(layers)
+        provenance_densities = self.provenance_svms(cat_layer_pairs(layers))
+        densities = value_densities + provenance_densities
+        densities = torch.cat([d.unsqueeze(1) for d in densities], dim=1)
+        return self.final_svm(self.density_normalize(densities))
 
 
 def save(model, model_name):

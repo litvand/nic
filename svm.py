@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from kmeans_pytorch import kmeans
-from sklearn.svm import OneClassSVM
+# from sklearn.svm import OneClassSVM
+from sklearn.linear_model import SGDOneClassSVM
 
 import model
 
@@ -47,7 +48,17 @@ def hinge_loss(outputs, margin):
     return torch.clamp(margin - outputs, min=0).mean()
 
 
-def train_one_class(svm, train_inputs, valid_inputs):
+def train_one_class(
+    svm,
+    train_inputs,
+    valid_inputs,
+    no_false_negatives=False,
+    lr=0.1,
+    batch_size=100,
+    n_epochs=100,
+    nu=0.5,
+    margin=1
+):
     """
     Trains SVM to give a positive output for all training inputs, while minimizing the total set
     of inputs for which its output is positive.
@@ -58,67 +69,73 @@ def train_one_class(svm, train_inputs, valid_inputs):
     svm: SVM to train
     train_inputs: Positive training inputs; no labels since one class
     valid_inputs: Positive validation inputs; no labels since one class
+    no_false_negatives: Whether to postprocess bias so that the output is positive for all training
+                        inputs, i.e. so that there are no false negatives.
+    lr: Learning rate
+    batch_size: Number of training inputs per batch
+    n_epochs: Number of passes through training data
+    nu: In range [0; 1]; lower nu --> higher importance of including positive examples
     """
 
+    assert lr * nu/2 <= 1, (lr, nu)  # `lr * nu/2 > 1` breaks regularization.
+    verbose = False
+
+    print("Training SVM")
+    svm.train()
     if svm.nystroem is not None:
         train_nystroem(svm.nystroem, train_inputs)
 
-    # Higher margin/lower nu --> greater importance of including positive examples
-    no_false_negatives = False
-    nu = 0.5  # In [0; 1].
-    margin = 1
-    batch_size = 150
-    n_epochs = 100
-    lr = 1e-1
-
-    svm.train()
-    optimizer = torch.optim.SGD(svm.parameters(), lr=lr)
-    alpha = nu / 2
-    assert lr * alpha <= 1, (lr, alpha)  # `lr * alpha > 1` breaks regularization.
+    weight_decay = nu/2
+    optimizer = torch.optim.SGD(svm.parameters(), lr=lr, weight_decay=0)
     min_valid_loss = float("inf")
     min_valid_state = svm.state_dict()
 
-    n_total_inputs = n_epochs * len(train_inputs)
-    for i_input in range(0, n_total_inputs, batch_size):
-        indices = torch.randint(high=len(train_inputs), size=(batch_size,))
-        batch_outputs = svm(train_inputs[indices])
-        loss = hinge_loss(batch_outputs, margin) + alpha * svm.regularization_loss()
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    for epoch in range(n_epochs):
+        train_inputs = train_inputs[torch.randperm(len(train_inputs))]
 
-        # `% ... < batch_size` instead of `% ... == 0`, because might not be exactly 0
-        if i_input % 20000 < batch_size or i_input + batch_size >= n_total_inputs:
-            with torch.no_grad():
-                print(f"{i_input//1000}k inputs processed, batch loss {loss.item()}")
+        loss = None
+        for i_input in range(0, len(train_inputs), batch_size):
+            batch_inputs = train_inputs[i_input:i_input + batch_size]
+            batch_outputs = svm(batch_inputs)
+            weight_decay_loss = (weight_decay * 0.5) * svm.coefs.dot(svm.coefs)
+            loss = hinge_loss(batch_outputs, margin) + nu * svm.bias + weight_decay_loss
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
 
-                svm.eval()
-                valid_outputs = svm(valid_inputs)
-                print(
-                    "Validation accuracy",
-                    round((torch.sum(valid_outputs > 0) / len(valid_outputs)).item(), 3),
-                )
+        with torch.no_grad():
+            svm.eval()
+            if verbose or epoch == n_epochs - 1:
+                print(f"Epoch {epoch}/{n_epochs} ({len(train_inputs)//1000}k samples per epoch)")
+                print(f"Last batch loss {loss.item()}")
+                print("Batch accuracy", torch.sum(batch_outputs > 0) / len(batch_outputs))
 
-                valid_loss = hinge_loss(valid_outputs, margin) + alpha * svm.regularization_loss()
-                print("Validation loss", round(valid_loss.item(), 3))
-                # TODO: Does early stopping make sense for one-class training?
-                if valid_loss <= min_valid_loss:
-                    if min_valid_loss < float("inf"):
-                        # Don't overwrite saved model if loss was just < infinity.
-                        min_valid_state = deepcopy(svm.state_dict())
-                    min_valid_loss = valid_loss
+            valid_outputs = svm(valid_inputs)
+            weight_decay_loss = (weight_decay * 0.5) * svm.coefs.dot(svm.coefs)
+            valid_loss = hinge_loss(valid_outputs, margin) + nu * svm.bias + weight_decay_loss
+            if verbose or epoch == n_epochs - 1:
+                print("Validation loss", valid_loss)
+                print("Validation accuracy", torch.sum(valid_outputs > 0) / len(valid_outputs))
 
-                svm.train()
+            if valid_loss <= min_valid_loss:
+                if min_valid_loss < float("inf"):
+                    # Don't overwrite saved model if loss was just < infinity.
+                    min_valid_state = deepcopy(svm.state_dict())
+                min_valid_loss = valid_loss
+
+            svm.train()
     svm.eval()
+    svm.load_state_dict(min_valid_state)
 
     with torch.no_grad():
-        svm.load_state_dict(min_valid_state)
         if no_false_negatives:
             # Adjust bias by choosing minimum output that avoids false negatives.
             min_output_should_be = 0.01
             svm.bias += min_output_should_be - svm(train_inputs).min()
         else:
             svm.bias -= margin  # Replicates sklearn OneClassSVM
+
+    print("Trained SVM")
 
 
 def circles_data(n_points, device):
@@ -136,6 +153,11 @@ def triangle_data(n_points, device):
     return inputs, labels
 
 
+def div_zero(a, b):
+    # 0 if a == b == 0
+    return a if a == 0 else a/b
+
+
 def print_results(labels, outputs, model_name):
     print(
         f"{model_name} validation accuracy",
@@ -144,11 +166,11 @@ def print_results(labels, outputs, model_name):
     neg = np.logical_not(labels)
     print(
         f"{model_name} validation false positives (as fraction of negative examples)",
-        np.count_nonzero(outputs[neg]) / np.count_nonzero(neg),
+        div_zero(np.count_nonzero(outputs[neg]), np.count_nonzero(neg)),
     )
     print(
         f"{model_name} validation false negatives (as fraction of positive examples)",
-        np.count_nonzero(np.logical_not(outputs[labels])) / np.count_nonzero(labels),
+        div_zero(np.count_nonzero(np.logical_not(outputs[labels])), np.count_nonzero(labels)),
     )
 
 
@@ -175,30 +197,34 @@ def plot_results(inputs, labels, outputs, model_name):
 
 if __name__ == "__main__":
     device = "cuda"
-
-    (inputs, labels), n_train = circles_data(10000, device), 5000
+    (inputs, labels), n_train = triangle_data(6000, device), 5000
     train_inputs, train_labels = inputs[:n_train], labels[:n_train]
     valid_inputs, valid_labels = inputs[n_train:], labels[n_train:]
-    train_inputs, pos_valid_inputs = train_inputs[train_labels], valid_inputs[valid_labels]
-    train_labels = None  # No negative training inputs
+    # No negative training inputs
+    train_inputs, train_labels = train_inputs[train_labels], None
     inputs -= train_inputs.mean(0, keepdim=True)
     inputs /= train_inputs.std(0, keepdim=True)
 
-    torch_svm = model.SVM(train_inputs[0], 2).to(device)
-    train_one_class(torch_svm, train_inputs, pos_valid_inputs)
+    # nystroem = model.Nystroem(train_inputs[0], 2).to(device)
+    # train_nystroem(nystroem, train_inputs)
+    # train_inputs, valid_inputs = nystroem(train_inputs), nystroem(valid_inputs)
+
+    torch_svm = model.SVM(train_inputs[0], 2, rbf=False).to(device)
+    train_one_class(torch_svm, train_inputs, valid_inputs[valid_labels])
     model.save(torch_svm, "svm")
     print(*torch_svm.named_parameters())
 
-    sk_svm = OneClassSVM(kernel="rbf")
+    sk_svm = SGDOneClassSVM()
     if sk_svm is not None:
         sk_svm.fit(train_inputs.detach().cpu().numpy())
-        # print("sk coefs", sk_svm.coef_)
-        # print("sk bias (== -offset)", -sk_svm.offset_)
+        print("sk coefs", sk_svm.coef_)
+        print("sk bias (== -offset)", -sk_svm.offset_)
 
     with torch.no_grad():
         torch_valid_outputs = (torch_svm(valid_inputs) > 0).detach().cpu().numpy()
         valid_inputs = valid_inputs.detach().cpu().numpy()
         valid_labels = valid_labels.detach().cpu().numpy()
+        # valid_labels = np.full(len(valid_inputs), True)
         print_results(valid_labels, torch_valid_outputs, "torch")
         plot_results(valid_inputs, valid_labels, torch_valid_outputs, "torch")
 
