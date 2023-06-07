@@ -1,5 +1,6 @@
-from importlib.metadata import requires
-from typing import Any
+import math
+import random
+
 import git
 import torch
 from torch import nn
@@ -105,18 +106,57 @@ class Detector(nn.Module):
         return self.seq(img_batch)
 
 
-def gaussian_kernel(inputs, centers, gamma):
-    """Square L2 distance between each input and each center"""
-    inputs = torch.flatten(inputs, 1)  # n_inputs, input_numel
+def pairwise_sqr_dists(points, centers):
+    """Square L2 distance between each point and each center (dists[i_point, i_center])"""
     size = (
-        len(inputs),
+        len(points),
         len(centers),
-        inputs[0].numel(),
-    )  # n_inputs, n_centers, input_numel
-    diffs = inputs.unsqueeze(1).expand(size) - centers.unsqueeze(0).expand(size)
-    square_distances = diffs.pow(2).sum(-1)  # n_inputs, n_centers
+        points.size(1),
+    )  # n_points, n_centers, n_features
+    diffs = points.unsqueeze(1).expand(size) - centers.unsqueeze(0).expand(size)
+    square_distances = diffs.pow(2).sum(-1)  # n_points, n_centers
+    return square_distances
+
+
+def gaussian_kernel(inputs, centers, gamma):
+    square_distances = pairwise_sqr_dists(inputs.flatten(1), centers)
     densities = torch.exp(-gamma * square_distances)  # n_inputs, n_centers
     return densities
+
+
+def kmeans_farthest(train_points, n_centers):
+    """
+    train_points: Training points (size = n_points, n_features)
+    n_centers: Number of centers
+
+    Returns: Cluster centers (size = n_centers, train_points.size(1))
+    """
+
+    assert len(train_points) >= n_centers, (train_points, n_centers)
+
+    dists = None  # Distance of each point from its closest center
+    centers = torch.empty(n_centers, train_points.size(1), device=train_points.device)
+    centers[0] = train_points[random.randint(0, len(train_points) - 1)]
+    for i_center in range(1, n_centers):
+        dists = pairwise_sqr_dists(train_points, centers[:i_center]).min(1)[0]
+
+        # Point that is farthest from all previous centers
+        centers[i_center] = train_points[dists.argmax()[0]]
+
+    avg_dist = torch.inf
+    while True:
+        dists, closest_centers = pairwise_sqr_dists(train_points, centers).min(1)
+        new_avg_dist = dists.mean()
+        if new_avg_dist >= avg_dist * (1 - 1e-4):
+            # new_avg_dist isn't much better than avg_dist
+            break
+
+        avg_dist = new_avg_dist
+        for i_center in range(n_centers):
+            # OPTIM: train_points[nn.functional.one_hot(closest_centers)[:, i_center]]?
+            centers[i_center] = train_points[closest_centers == i_center].mean(0)
+
+    return centers
 
 
 class Nystroem(nn.Module):
@@ -174,7 +214,7 @@ class Normalize(nn.Module):
     def forward(self, inputs):
         size = [1] * inputs.ndim
         size[1] = len(self.mean)
-        return (inputs - self.mean.view(size)) * self.inv_std.view(size)
+        return (inputs - self.mean.expand(size)) * self.inv_std.expand(size)
 
 
 class Elemwise(nn.Module):
@@ -240,6 +280,52 @@ class NIC(nn.Module):
         densities = value_densities + provenance_densities
         densities = torch.cat([d.unsqueeze(1) for d in densities], dim=1)
         return self.final_svm(self.density_normalize(densities))
+
+
+def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
+    """
+    Split parameters of `model` into those that will experience weight decay and those that won't
+    (biases, batch norm, layer norm, embedding) and those that won't be updated at all. Based on
+    https://github.com/karpathy/minGPT/blob/3ed14b2cec0dfdad3f4b2831f2b4a86d11aef150/mingpt/model.py#L136
+    """
+
+    decay, no_decay = [], []
+    whitelist_modules = (torch.nn.Linear,)
+    blacklist_modules = ("LayerNorm", "BatchNorm", "Embedding")
+    for module in model.modules():
+        for param_name, param in module.named_parameters(recurse=False):
+            if not param.requires_grad:
+                continue  # Won't be updated.
+
+            elif any(n in type(module).__name__ for n in blacklist_modules):
+                no_decay.append(param)  # Don't decay blacklist.
+
+            elif param_name.endswith('bias'):
+                no_decay.append(param)  # Don't decay biases.
+
+            elif param_name.endswith('weight') and isinstance(module, whitelist_modules):
+                decay.append(param)  # Decay whitelist weights.
+
+            elif param_name == "coefs" and isinstance(module, SVM):
+                decay.append(param)  # Decay SVM coefficients.
+
+            else:
+                print(f"Warning: assuming weight_decay=0 for {param_name}")
+                no_decay.append(param)
+
+    groups = [
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0}
+    ]
+    optimizer = Optimizer(groups, **kwargs)
+    return optimizer
+
+
+def gradient_noise(model, i_batch, initial_variance=0.01):
+    with torch.no_grad():
+        sd = math.sqrt(initial_variance / (1 + i_batch)**0.55)
+        for param in model.parameters():
+            param.grad.add_(torch.randn_like(param.grad), alpha=sd)
 
 
 def save(model, model_name):

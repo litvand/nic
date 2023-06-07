@@ -1,13 +1,12 @@
 from copy import deepcopy
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from kmeans_pytorch import kmeans
 # from sklearn.svm import OneClassSVM
 from sklearn.linear_model import SGDOneClassSVM
 
 import model
-
 
 def train_nystroem(nystroem, train_inputs):
     assert nystroem.n_centers <= len(train_inputs), (
@@ -38,7 +37,7 @@ def train_nystroem(nystroem, train_inputs):
         center_densities = model.gaussian_kernel(
             nystroem.centers, nystroem.centers, nystroem.gamma
         )
-        u, s, vh = torch.linalg.svd(center_densities, driver="gesvd")
+        u, s, vh = torch.linalg.svd(center_densities)
         s = torch.clamp(s, min=1e-12)
         nystroem.normalization.copy_(torch.mm(u / s.sqrt(), vh).t())
 
@@ -52,12 +51,8 @@ def train_one_class(
     svm,
     train_inputs,
     valid_inputs,
-    no_false_negatives=False,
-    lr=0.1,
     batch_size=100,
-    n_epochs=100,
-    nu=0.5,
-    margin=1
+    n_epochs=100
 ):
     """
     Trains SVM to give a positive output for all training inputs, while minimizing the total set
@@ -77,16 +72,21 @@ def train_one_class(
     nu: In range [0; 1]; lower nu --> higher importance of including positive examples
     """
 
-    assert lr * nu/2 <= 1, (lr, nu)  # `lr * nu/2 > 1` breaks regularization.
     verbose = False
+    no_false_negatives = True
+    lr = 0.1
+    nu = 0.01 if no_false_negatives else 0.5
+    margin = 1
+    assert lr * nu/2 <= 1, (lr, nu)  # `lr * nu/2 > 1` breaks regularization.
 
     print("Training SVM")
     svm.train()
     if svm.nystroem is not None:
         train_nystroem(svm.nystroem, train_inputs)
 
-    weight_decay = nu/2
-    optimizer = torch.optim.SGD(svm.parameters(), lr=lr, weight_decay=0)
+    weight_decay = nu / 2
+    optimizer = model.get_optimizer(torch.optim.SGD, svm, weight_decay=weight_decay, lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=verbose)
     min_valid_loss = float("inf")
     min_valid_state = svm.state_dict()
 
@@ -97,8 +97,7 @@ def train_one_class(
         for i_input in range(0, len(train_inputs), batch_size):
             batch_inputs = train_inputs[i_input:i_input + batch_size]
             batch_outputs = svm(batch_inputs)
-            weight_decay_loss = (weight_decay * 0.5) * svm.coefs.dot(svm.coefs)
-            loss = hinge_loss(batch_outputs, margin) + nu * svm.bias + weight_decay_loss
+            loss = hinge_loss(batch_outputs, margin) + nu * svm.bias
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -113,6 +112,7 @@ def train_one_class(
             valid_outputs = svm(valid_inputs)
             weight_decay_loss = (weight_decay * 0.5) * svm.coefs.dot(svm.coefs)
             valid_loss = hinge_loss(valid_outputs, margin) + nu * svm.bias + weight_decay_loss
+            scheduler.step(valid_loss)
             if verbose or epoch == n_epochs - 1:
                 print("Validation loss", valid_loss)
                 print("Validation accuracy", torch.sum(valid_outputs > 0) / len(valid_outputs))
@@ -147,9 +147,17 @@ def circles_data(n_points, device):
 
 
 def triangle_data(n_points, device):
-    inputs = torch.rand((n_points, 2), device=device)
+    inputs = torch.randn((n_points, 2), device=device)
     # Torch optimizes `pow(b)` for integer b in (-32, 32)
     labels = 2 * inputs[:, 0] < inputs[:, 1]
+    return inputs, labels
+
+
+def line_data(n_points, device):
+    inputs = torch.empty((n_points, 2), device=device)
+    inputs[:, 0] = torch.randn(n_points, device=device) + 1
+    inputs[:, 1] = inputs[:, 0]
+    labels = inputs[:, 0] < 0
     return inputs, labels
 
 
@@ -174,36 +182,49 @@ def print_results(labels, outputs, model_name):
     )
 
 
-def plot_results(inputs, labels, outputs, model_name):
+def plot_results(inputs, labels, outputs, model_name, kernel=None):
     pos = labels
     neg = np.logical_not(labels)
     pos_output = outputs > 0
     neg_output = np.logical_not(pos_output)
 
-    pos_pos_output = inputs[pos & pos_output]
-    neg_pos_output = inputs[neg & pos_output]
-    pos_neg_output = inputs[pos & neg_output]
-    neg_neg_output = inputs[neg & neg_output]
+    pos_pos_output = inputs[pos & pos_output]  # true positive
+    neg_pos_output = inputs[neg & pos_output]  # false positive
+    pos_neg_output = inputs[pos & neg_output]  # false negative
+    neg_neg_output = inputs[neg & neg_output]  # true negative
 
     _, ax = plt.subplots()
     ax.set_title(model_name + " (marker=label, color=output)")
+    ax.set_aspect('equal', adjustable='box')
 
-    # plt.scatter(inputs[:, 0], inputs[:, 1], marker=',', c='black')
+    plt.scatter(inputs[:, 0], inputs[:, 1], marker=',', c='0.8')
     plt.scatter(pos_pos_output[:, 0], pos_pos_output[:, 1], marker="+", c="green")
     plt.scatter(neg_pos_output[:, 0], neg_pos_output[:, 1], marker="v", c="green")
     plt.scatter(pos_neg_output[:, 0], pos_neg_output[:, 1], marker="+", c="red")
     plt.scatter(neg_neg_output[:, 0], neg_neg_output[:, 1], marker="v", c="red")
+    if kernel is not None:
+        centers = kernel.centers.detach().cpu().numpy()
+        plt.scatter(centers[:, 0], centers[:, 1], marker=".", c="blue")
+
+
+def save_data(train_inputs, valid_inputs, valid_labels, name):
+    torch.save((train_inputs, valid_inputs, valid_labels), f"data/{name}.pt")
+
+
+def load_data(name):
+    train_inputs, valid_inputs, valid_labels = torch.load(f"data/{name}.pt")
+    return train_inputs, valid_inputs, valid_labels
 
 
 if __name__ == "__main__":
-    device = "cuda"
-    (inputs, labels), n_train = triangle_data(6000, device), 5000
-    train_inputs, train_labels = inputs[:n_train], labels[:n_train]
+    device = "cpu"
+    (inputs, labels), n_train = line_data(2000, device), 1000
+    # Only training inputs with positive labels
+    train_inputs = inputs[:n_train][labels[:n_train]]
     valid_inputs, valid_labels = inputs[n_train:], labels[n_train:]
-    # No negative training inputs
-    train_inputs, train_labels = train_inputs[train_labels], None
-    inputs -= train_inputs.mean(0, keepdim=True)
-    inputs /= train_inputs.std(0, keepdim=True)
+
+    normalize = model.Normalize(train_inputs.min(0)[0], train_inputs.std(0))
+    train_inputs, valid_inputs = normalize(train_inputs), normalize(valid_inputs)
 
     # nystroem = model.Nystroem(train_inputs[0], 2).to(device)
     # train_nystroem(nystroem, train_inputs)
@@ -214,7 +235,7 @@ if __name__ == "__main__":
     model.save(torch_svm, "svm")
     print(*torch_svm.named_parameters())
 
-    sk_svm = SGDOneClassSVM()
+    sk_svm = SGDOneClassSVM(nu=0.01)
     if sk_svm is not None:
         sk_svm.fit(train_inputs.detach().cpu().numpy())
         print("sk coefs", sk_svm.coef_)
@@ -226,7 +247,9 @@ if __name__ == "__main__":
         valid_labels = valid_labels.detach().cpu().numpy()
         # valid_labels = np.full(len(valid_inputs), True)
         print_results(valid_labels, torch_valid_outputs, "torch")
-        plot_results(valid_inputs, valid_labels, torch_valid_outputs, "torch")
+        plot_results(
+            valid_inputs, valid_labels, torch_valid_outputs, "torch", torch_svm.nystroem
+        )
 
         if sk_svm is not None:
             sk_valid_outputs = sk_svm.predict(valid_inputs) > 0

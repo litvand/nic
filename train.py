@@ -12,11 +12,12 @@ from lsuv_init import LSUV_
 from svm import train_one_class
 
 
-def logistic_regression(net, data, lr=1e-2, batch_size=100, n_epochs=100, weight_decay=1e-9):
+def logistic_regression(net, data, batch_size=100, n_epochs=100):
     net.train()
     (train_inputs, train_labels), (valid_inputs, valid_labels) = data
 
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = model.get_optimizer(torch.optim.NAdam, net, weight_decay=1e-6, lr=0.1)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
     min_valid_loss = float("inf")
     min_valid_state = net.state_dict()
 
@@ -29,9 +30,11 @@ def logistic_regression(net, data, lr=1e-2, batch_size=100, n_epochs=100, weight
             batch_inputs = train_inputs[i_input:i_input + batch_size]
             batch_labels = train_labels[i_input:i_input + batch_size]
             batch_outputs = net(batch_inputs)
+
             loss = F.cross_entropy(batch_outputs, batch_labels)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            model.gradient_noise(net, i_input//batch_size)
             optimizer.step()
 
         with torch.no_grad():
@@ -42,6 +45,7 @@ def logistic_regression(net, data, lr=1e-2, batch_size=100, n_epochs=100, weight
 
             valid_outputs = net(valid_inputs)
             valid_loss = F.cross_entropy(valid_outputs, valid_labels).item()
+            scheduler.step(valid_loss)
             print("Validation loss", valid_loss)
             print_accuracy("Validation accuracy", valid_outputs, valid_labels)
 
