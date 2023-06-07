@@ -3,10 +3,12 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+
 # from sklearn.svm import OneClassSVM
 from sklearn.linear_model import SGDOneClassSVM
 
 import model
+
 
 def train_nystroem(nystroem, train_inputs):
     assert nystroem.n_centers <= len(train_inputs), (
@@ -47,13 +49,7 @@ def hinge_loss(outputs, margin):
     return torch.clamp(margin - outputs, min=0).mean()
 
 
-def train_one_class(
-    svm,
-    train_inputs,
-    val_inputs,
-    batch_size=100,
-    n_epochs=100
-):
+def train_one_class(svm, train_inputs, val_inputs, batch_size=100, n_epochs=100):
     """
     Trains SVM to give a positive output for all training inputs, while minimizing the total set
     of inputs for which its output is positive.
@@ -77,7 +73,7 @@ def train_one_class(
     lr = 0.1
     nu = 0.01 if no_false_negatives else 0.5
     margin = 1
-    assert lr * nu/2 <= 1, (lr, nu)  # `lr * nu/2 > 1` breaks regularization.
+    assert lr * nu / 2 <= 1, (lr, nu)  # `lr * nu/2 > 1` breaks regularization.
 
     print("Training SVM")
     svm.train()
@@ -85,7 +81,9 @@ def train_one_class(
         train_nystroem(svm.nystroem, train_inputs)
 
     weight_decay = nu / 2
-    optimizer = model.get_optimizer(torch.optim.SGD, svm, weight_decay=weight_decay, lr=lr)
+    optimizer = model.get_optimizer(
+        torch.optim.SGD, svm, weight_decay=weight_decay, lr=lr
+    )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=verbose)
     min_val_loss = float("inf")
     min_val_state = svm.state_dict()
@@ -95,7 +93,7 @@ def train_one_class(
 
         loss = None
         for i_input in range(0, len(train_inputs), batch_size):
-            batch_inputs = train_inputs[i_input:i_input + batch_size]
+            batch_inputs = train_inputs[i_input : i_input + batch_size]
             batch_outputs = svm(batch_inputs)
             loss = hinge_loss(batch_outputs, margin) + nu * svm.bias
             optimizer.zero_grad(set_to_none=True)
@@ -105,17 +103,25 @@ def train_one_class(
         with torch.no_grad():
             svm.eval()
             if verbose or epoch == n_epochs - 1:
-                print(f"Epoch {epoch}/{n_epochs} ({len(train_inputs)//1000}k samples per epoch)")
+                print(
+                    f"Epoch {epoch}/{n_epochs} ({len(train_inputs)//1000}k samples per epoch)"
+                )
                 print(f"Last batch loss {loss.item()}")
-                print("Batch accuracy", torch.sum(batch_outputs > 0) / len(batch_outputs))
+                print(
+                    "Batch accuracy", torch.sum(batch_outputs > 0) / len(batch_outputs)
+                )
 
             val_outputs = svm(val_inputs)
             weight_decay_loss = (weight_decay * 0.5) * svm.coefs.dot(svm.coefs)
-            val_loss = hinge_loss(val_outputs, margin) + nu * svm.bias + weight_decay_loss
+            val_loss = (
+                hinge_loss(val_outputs, margin) + nu * svm.bias + weight_decay_loss
+            )
             scheduler.step(val_loss)
             if verbose or epoch == n_epochs - 1:
                 print("Validation loss", val_loss)
-                print("Validation accuracy", torch.sum(val_outputs > 0) / len(val_outputs))
+                print(
+                    "Validation accuracy", torch.sum(val_outputs > 0) / len(val_outputs)
+                )
 
             if val_loss <= min_val_loss:
                 if min_val_loss < float("inf"):
@@ -170,8 +176,11 @@ if __name__ == "__main__":
         # val_labels = np.full(len(val_inputs), True)
         print_results(val_labels, torch_val_outputs, "torch")
         plot_results(
-            val_inputs, val_labels, torch_val_outputs, "torch",
-            torch_svm.nystroem.centers.detach().cpu().numpy()
+            val_inputs,
+            val_labels,
+            torch_val_outputs,
+            "torch",
+            torch_svm.nystroem.centers.detach().cpu().numpy(),
         )
 
         if sk_svm is not None:

@@ -27,14 +27,14 @@ def logistic_regression(net, data, batch_size=100, n_epochs=100):
 
         loss = None
         for i_input in range(0, len(train_inputs), batch_size):
-            batch_inputs = train_inputs[i_input:i_input + batch_size]
-            batch_labels = train_labels[i_input:i_input + batch_size]
+            batch_inputs = train_inputs[i_input : i_input + batch_size]
+            batch_labels = train_labels[i_input : i_input + batch_size]
             batch_outputs = net(batch_inputs)
 
             loss = F.cross_entropy(batch_outputs, batch_labels)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            model.gradient_noise(net, i_input//batch_size)
+            model.gradient_noise(net, i_input // batch_size)
             optimizer.step()
 
         with torch.no_grad():
@@ -82,7 +82,7 @@ def train_layer_svms(train_layers, val_layers, svm_name):
         svms.append(svm)
         train_densities.append(svm(train_inputs))
         val_densities.append(svm(val_layers[i_layer]))
-    
+
     return svms, train_densities, val_densities
 
 
@@ -98,11 +98,17 @@ def train_nic(trained_model, data):
         assert train_imgs.ndim == 4, train_imgs.size()
 
         train_layers = [train_imgs] + trained_model.activations(train_imgs)
-        normalization = [model.Normalize(layer.mean(-1), layer.std(-1)) for layer in train_layers]
-        train_layers = [n(layer).flatten(1) for n, layer in zip(normalization, train_layers)]
+        normalization = [
+            model.Normalize(layer.mean(-1), layer.std(-1)) for layer in train_layers
+        ]
+        train_layers = [
+            n(layer).flatten(1) for n, layer in zip(normalization, train_layers)
+        ]
 
         val_layers = [val_imgs] + trained_model.activations(val_imgs)
-        val_layers = [n(layer).flatten(1) for n, layer in zip(normalization, val_layers)]
+        val_layers = [
+            n(layer).flatten(1) for n, layer in zip(normalization, val_layers)
+        ]
 
     train_densities, val_densities = [], []
 
@@ -120,7 +126,6 @@ def train_nic(trained_model, data):
         svm = model.SVM(inputs[0], 100).to(inputs.device)
         train_one_class(svm, inputs, val_pairs[i_layer])
         provenance_svms.append(svm)
-
 
     final_svm = model.SVM()
 

@@ -209,7 +209,7 @@ class Normalize(nn.Module):
 
         super().__init__()
         self.mean = nn.Parameter(torch.tensor(mean), requires_grad=False)
-        self.inv_std = nn.Parameter(torch.tensor(1/std), requires_grad=False)
+        self.inv_std = nn.Parameter(torch.tensor(1 / std), requires_grad=False)
 
     def forward(self, inputs):
         size = [1] * inputs.ndim
@@ -240,7 +240,8 @@ def cat_layer_pairs(layers):
         n_layer_features = torch.Tensor([layer.size(1) for layer in layers])
         ends = n_layer_features.cumsum()
     return [
-        cat_all[:, ends[i] - n_layer_features[i]:ends[i+1]] for i in range(len(layers) - 1)
+        cat_all[:, ends[i] - n_layer_features[i] : ends[i + 1]]
+        for i in range(len(layers) - 1)
     ]
 
 
@@ -258,7 +259,7 @@ class NIC(nn.Module):
         value_svms,
         provenance_svms,
         density_normalize,
-        final_svm
+        final_svm,
     ):
         super().__init__()
         self.trained_model = trained_model
@@ -300,10 +301,12 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
             elif any(n in type(module).__name__ for n in blacklist_modules):
                 no_decay.append(param)  # Don't decay blacklist.
 
-            elif param_name.endswith('bias'):
+            elif param_name.endswith("bias"):
                 no_decay.append(param)  # Don't decay biases.
 
-            elif param_name.endswith('weight') and isinstance(module, whitelist_modules):
+            elif param_name.endswith("weight") and isinstance(
+                module, whitelist_modules
+            ):
                 decay.append(param)  # Decay whitelist weights.
 
             elif param_name == "coefs" and isinstance(module, SVM):
@@ -315,7 +318,7 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
 
     groups = [
         {"params": decay, "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0}
+        {"params": no_decay, "weight_decay": 0},
     ]
     optimizer = Optimizer(groups, **kwargs)
     return optimizer
@@ -323,7 +326,7 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
 
 def gradient_noise(model, i_batch, initial_variance=0.01):
     with torch.no_grad():
-        sd = math.sqrt(initial_variance / (1 + i_batch)**0.55)
+        sd = math.sqrt(initial_variance / (1 + i_batch) ** 0.55)
         for param in model.parameters():
             param.grad.add_(torch.randn_like(param.grad), alpha=sd)
 

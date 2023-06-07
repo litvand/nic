@@ -10,7 +10,7 @@ def preprocess(n_train, points, labels):
     train_points = points[:n_train][labels[:n_train]]
     val_points, val_labels = points[n_train:], labels[n_train:]
 
-    mean, inv_std = train_points.mean(), 1.0/train_points.std()
+    mean, inv_std = train_points.mean(), 1.0 / train_points.std()
     train_points.sub_(mean).mul_(inv_std)
     val_points.sub_(mean).mul_(inv_std)
 
@@ -67,9 +67,9 @@ def scatter_labels_outputs(points, labels, outputs, model_name, centers=None):
 
     _, ax = plt.subplots()
     ax.set_title(model_name + " (marker=label, color=output)")
-    ax.set_aspect('equal', adjustable='box')
+    ax.set_aspect("equal", adjustable="box")
 
-    plt.scatter(points[:, 0], points[:, 1], marker=',', c='0.8')
+    plt.scatter(points[:, 0], points[:, 1], marker=",", c="0.8")
     plt.scatter(pos_pos_output[:, 0], pos_pos_output[:, 1], marker="+", c="green")
     plt.scatter(neg_pos_output[:, 0], neg_pos_output[:, 1], marker="v", c="green")
     plt.scatter(pos_neg_output[:, 0], pos_neg_output[:, 1], marker="+", c="red")
@@ -80,7 +80,7 @@ def scatter_labels_outputs(points, labels, outputs, model_name, centers=None):
 
 def div_zero(a, b):
     # 0 if a == b == 0
-    return a if a == 0 else a/b
+    return a if a == 0 else a / b
 
 
 def percent(x):
@@ -91,21 +91,18 @@ def print_accuracy(labels, outputs, model_name):
     outputs = outputs > 0
     print(
         f"{model_name} accuracy:",
-        percent(div_zero(torch.count_nonzero(outputs == labels), len(labels)))
+        percent(div_zero(torch.count_nonzero(outputs == labels), len(labels))),
     )
 
     on_pos, on_neg = outputs[labels], outputs[~labels]
     acc_on_pos = div_zero(on_pos.count_nonzero(), len(on_pos))
     acc_on_neg = div_zero(len(on_neg) - on_neg.count_nonzero(), len(on_neg))
-    print(
-        f"{model_name} balanced accuracy:",
-        percent((acc_on_pos + acc_on_neg)/2)
-    )
+    print(f"{model_name} balanced accuracy:", percent((acc_on_pos + acc_on_neg) / 2))
     print(
         f"{model_name} true positives (as fraction of positive examples):",
-        percent(acc_on_pos)
+        percent(acc_on_pos),
     )
     print(
         f"{model_name} true negatives (as fraction of negative examples):",
-        percent(acc_on_neg)
+        percent(acc_on_neg),
     )
