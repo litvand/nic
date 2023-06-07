@@ -14,12 +14,12 @@ from svm import train_one_class
 
 def logistic_regression(net, data, batch_size=100, n_epochs=100):
     net.train()
-    (train_inputs, train_labels), (valid_inputs, valid_labels) = data
+    (train_inputs, train_labels), (val_inputs, val_labels) = data
 
     optimizer = model.get_optimizer(torch.optim.NAdam, net, weight_decay=1e-6, lr=0.1)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-    min_valid_loss = float("inf")
-    min_valid_state = net.state_dict()
+    min_val_loss = float("inf")
+    min_val_state = net.state_dict()
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_inputs))
@@ -43,21 +43,21 @@ def logistic_regression(net, data, batch_size=100, n_epochs=100):
             print(f"Last batch loss {loss.item()}")
             print_accuracy("Batch accuracy", batch_outputs, batch_labels)
 
-            valid_outputs = net(valid_inputs)
-            valid_loss = F.cross_entropy(valid_outputs, valid_labels).item()
-            scheduler.step(valid_loss)
-            print("Validation loss", valid_loss)
-            print_accuracy("Validation accuracy", valid_outputs, valid_labels)
+            val_outputs = net(val_inputs)
+            val_loss = F.cross_entropy(val_outputs, val_labels).item()
+            scheduler.step(val_loss)
+            print("Validation loss", val_loss)
+            print_accuracy("Validation accuracy", val_outputs, val_labels)
 
-            if valid_loss <= min_valid_loss:
-                if min_valid_loss < float("inf"):
+            if val_loss <= min_val_loss:
+                if min_val_loss < float("inf"):
                     # Don't overwrite saved model if loss was just < infinity.
-                    min_valid_state = deepcopy(net.state_dict())
-                min_valid_loss = valid_loss
+                    min_val_state = deepcopy(net.state_dict())
+                min_val_loss = val_loss
 
             net.train()
     net.eval()
-    net.load_state_dict(min_valid_state)
+    net.load_state_dict(min_val_state)
 
 
 def train_detector(trained_model, data, load_name=None, eps=0.2):
@@ -73,17 +73,17 @@ def train_detector(trained_model, data, load_name=None, eps=0.2):
     logistic_regression(detector, detector_data, "detect")
 
 
-def train_layer_svms(train_layers, valid_layers, svm_name):
-    svms, train_densities, valid_densities = [], [], []
+def train_layer_svms(train_layers, val_layers, svm_name):
+    svms, train_densities, val_densities = [], [], []
     for i_layer, train_inputs in enumerate(train_layers):
         print(f"--- {svm_name} SVM #{i_layer} ---")
         svm = model.SVM(train_inputs[0], 100).to(train_inputs.device)
-        train_one_class(svm, train_inputs, valid_layers[i_layer])
+        train_one_class(svm, train_inputs, val_layers[i_layer])
         svms.append(svm)
         train_densities.append(svm(train_inputs))
-        valid_densities.append(svm(valid_layers[i_layer]))
+        val_densities.append(svm(val_layers[i_layer]))
     
-    return svms, train_densities, valid_densities
+    return svms, train_densities, val_densities
 
 
 def train_nic(trained_model, data):
@@ -94,17 +94,17 @@ def train_nic(trained_model, data):
           (n_images, height, width, n_channels).
     """
     with torch.no_grad():
-        (train_imgs, _), (valid_imgs, _) = data
+        (train_imgs, _), (val_imgs, _) = data
         assert train_imgs.ndim == 4, train_imgs.size()
 
         train_layers = [train_imgs] + trained_model.activations(train_imgs)
         normalization = [model.Normalize(layer.mean(-1), layer.std(-1)) for layer in train_layers]
         train_layers = [n(layer).flatten(1) for n, layer in zip(normalization, train_layers)]
 
-        valid_layers = [valid_imgs] + trained_model.activations(valid_imgs)
-        valid_layers = [n(layer).flatten(1) for n, layer in zip(normalization, valid_layers)]
+        val_layers = [val_imgs] + trained_model.activations(val_imgs)
+        val_layers = [n(layer).flatten(1) for n, layer in zip(normalization, val_layers)]
 
-    train_densities, valid_densities = [], []
+    train_densities, val_densities = [], []
 
     value_svms = []
 
@@ -114,11 +114,11 @@ def train_nic(trained_model, data):
 
     provenance_svms = []
     train_pairs = model.cat_layer_pairs(train_layers)
-    valid_pairs = model.cat_layer_pairs(valid_layers)
+    val_pairs = model.cat_layer_pairs(val_layers)
     for i_layer, inputs in enumerate(train_pairs):
         print(f"--- Provenance SVM #{i_layer} ---")
         svm = model.SVM(inputs[0], 100).to(inputs.device)
-        train_one_class(svm, inputs, valid_pairs[i_layer])
+        train_one_class(svm, inputs, val_pairs[i_layer])
         provenance_svms.append(svm)
 
 

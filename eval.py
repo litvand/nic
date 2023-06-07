@@ -14,13 +14,13 @@ def print_accuracy(msg, outputs, labels):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    _, (valid_imgs, valid_labels) = mnist.load_data(
+    _, (val_imgs, val_labels) = mnist.load_data(
         n_train=22000, n_valid=2000, device=device
     )
-    m = model.PoolNet(valid_imgs[0]).to(device)
+    m = model.PoolNet(val_imgs[0]).to(device)
     model.load(m, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
     m.eval()
-    print_accuracy("Validation accuracy", m(valid_imgs[:10000]), valid_labels[:10000])
+    print_accuracy("Validation accuracy", m(val_imgs[:10000]), val_labels[:10000])
 
 
 # FullyConnected, 50k training images, 0.984 max validation accuracy
