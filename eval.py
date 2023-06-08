@@ -14,9 +14,7 @@ def print_accuracy(msg, outputs, labels):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    _, (val_imgs, val_labels) = mnist.load_data(
-        n_train=22000, n_valid=2000, device=device
-    )
+    _, (val_imgs, val_labels) = mnist.load_data(n_train=22000, n_valid=2000, device=device)
     m = model.PoolNet(val_imgs[0]).to(device)
     model.load(m, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
     m.eval()

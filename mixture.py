@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from pycave.bayes import GaussianMixture
 
 import data2d
+from model import Whiten
 
 
 def mixture_densities(mixture, points):
@@ -13,7 +13,9 @@ def mixture_densities(mixture, points):
 
 if __name__ == "__main__":
     device = "cuda"
-    train_points, val_points, val_labels = data2d.line(5000, 5000, device)
+    train_points, val_points, val_labels = data2d.circles(5000, 5000, device)
+    whiten = Whiten(train_points[0]).fit(train_points, zca=True)
+    train_points, val_points = whiten(train_points), whiten(val_points)
 
     mixture = GaussianMixture(
         num_components=min(100, 2 + len(train_points) // 25),

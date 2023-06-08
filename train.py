@@ -98,17 +98,11 @@ def train_nic(trained_model, data):
         assert train_imgs.ndim == 4, train_imgs.size()
 
         train_layers = [train_imgs] + trained_model.activations(train_imgs)
-        normalization = [
-            model.Normalize(layer.mean(-1), layer.std(-1)) for layer in train_layers
-        ]
-        train_layers = [
-            n(layer).flatten(1) for n, layer in zip(normalization, train_layers)
-        ]
+        normalization = [model.Normalize(layer.mean(-1), layer.std(-1)) for layer in train_layers]
+        train_layers = [n(layer).flatten(1) for n, layer in zip(normalization, train_layers)]
 
         val_layers = [val_imgs] + trained_model.activations(val_imgs)
-        val_layers = [
-            n(layer).flatten(1) for n, layer in zip(normalization, val_layers)
-        ]
+        val_layers = [n(layer).flatten(1) for n, layer in zip(normalization, val_layers)]
 
     train_densities, val_densities = [], []
 

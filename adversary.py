@@ -61,9 +61,7 @@ def fgsm_(imgs, labels, trained_model, eps, target_class=None):
 
         if target_class is None:
             # Untargeted adversary: Make output differ from the correct label.
-            loss = F.cross_entropy(
-                outputs, labels[slice(i_first, i_first + chunk_size)]
-            )
+            loss = F.cross_entropy(outputs, labels[slice(i_first, i_first + chunk_size)])
         else:
             # Targeted adversary: Make output equal to the target class.
             output_prs = F.softmax(outputs, dim=1)
@@ -106,10 +104,7 @@ def cmp_single(i_img, imgs, labels, trained_model, eps):
 
     original_class = torch.argmax(trained_model(imgs[i_img].unsqueeze(0)), 1).item()
     adv_class = torch.argmax(trained_model(adv_img.unsqueeze(0)), 1).item()
-    print(
-        f"Label {labels[i_img].item()}, original {original_class}, adversarial"
-        f" {adv_class}"
-    )
+    print(f"Label {labels[i_img].item()}, original {original_class}, adversarial" f" {adv_class}")
 
     plt.imshow(imgs[i_img][0].cpu(), cmap="gray")
     plt.subplots()

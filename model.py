@@ -3,7 +3,7 @@ import random
 
 import git
 import torch
-from torch import nn
+from torch import nn, linalg
 
 N_CLASSES = 10
 
@@ -84,9 +84,7 @@ class PoolNet(nn.Module):
     def activations(self, img_batch):
         """Returns activations of hidden layers before the output"""
         activations = activations_at(img_batch, self.convs, [3, -1])
-        activations.extend(
-            activations_at(activations[-1], self.fully_connected, [2, 3])
-        )
+        activations.extend(activations_at(activations[-1], self.fully_connected, [2, 3]))
         return activations
 
 
@@ -175,9 +173,7 @@ class Nystroem(nn.Module):
         self.centers = nn.Parameter(
             torch.zeros(n_centers, example_input.numel()), requires_grad=False
         )
-        self.normalization = nn.Parameter(
-            torch.zeros(n_centers, n_centers), requires_grad=False
-        )
+        self.normalization = nn.Parameter(torch.zeros(n_centers, n_centers), requires_grad=False)
 
     def forward(self, inputs):
         densities = gaussian_kernel(inputs, self.centers, self.gamma)
@@ -217,6 +213,29 @@ class Normalize(nn.Module):
         return (inputs - self.mean.expand(size)) * self.inv_std.expand(size)
 
 
+class Whiten(nn.Module):
+    def __init__(self, example_input):
+        super().__init__()
+        n_features = example_input.numel()
+        d = example_input.device
+        self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
+        self.w = nn.Parameter(torch.zeros(n_features, n_features, device=d), requires_grad=False)
+
+    def fit(self, train_inputs, zca=False):
+        train_inputs = train_inputs.flatten(1)
+        self.mean.copy_(train_inputs.mean(0))
+        cov = torch.cov((train_inputs - self.mean).T)
+        eig_vals, eig_vecs = linalg.eigh(cov)
+        torch.mm(eig_vals.sqrt_().reciprocal_().diag(), eig_vecs.T, out=self.w)
+        if zca:
+            self.w.copy_(eig_vecs.mm(self.w))
+
+        return self
+
+    def forward(self, inputs):
+        return (self.w @ (inputs.flatten(1) - self.mean).T).T
+
+
 class Elemwise(nn.Module):
     def __init__(self, modules):
         super().__init__()
@@ -239,10 +258,7 @@ def cat_layer_pairs(layers):
     with torch.no_grad():
         n_layer_features = torch.Tensor([layer.size(1) for layer in layers])
         ends = n_layer_features.cumsum()
-    return [
-        cat_all[:, ends[i] - n_layer_features[i] : ends[i + 1]]
-        for i in range(len(layers) - 1)
-    ]
+    return [cat_all[:, ends[i] - n_layer_features[i] : ends[i + 1]] for i in range(len(layers) - 1)]
 
 
 class NIC(nn.Module):
@@ -290,30 +306,33 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
     https://github.com/karpathy/minGPT/blob/3ed14b2cec0dfdad3f4b2831f2b4a86d11aef150/mingpt/model.py#L136
     """
 
-    decay, no_decay = [], []
     whitelist_modules = (torch.nn.Linear,)
     blacklist_modules = ("LayerNorm", "BatchNorm", "Embedding")
+
+    decay, no_decay = [], []
     for module in model.modules():
+        module_name = type(module).__name__
+
         for param_name, param in module.named_parameters(recurse=False):
             if not param.requires_grad:
                 continue  # Won't be updated.
 
-            elif any(n in type(module).__name__ for n in blacklist_modules):
+            elif any(n in module_name for n in blacklist_modules):
                 no_decay.append(param)  # Don't decay blacklist.
 
             elif param_name.endswith("bias"):
                 no_decay.append(param)  # Don't decay biases.
 
-            elif param_name.endswith("weight") and isinstance(
-                module, whitelist_modules
-            ):
+            elif param_name.endswith("weight") and isinstance(module, whitelist_modules):
                 decay.append(param)  # Decay whitelist weights.
 
             elif param_name == "coefs" and isinstance(module, SVM):
                 decay.append(param)  # Decay SVM coefficients.
 
             else:
-                print(f"Warning: assuming weight_decay=0 for {param_name}")
+                print(
+                    f"Warning: assuming weight_decay=0 for module {module_name} parameter `{param_name}`"
+                )
                 no_decay.append(param)
 
     groups = [

@@ -20,9 +20,7 @@ def train_nystroem(nystroem, train_inputs):
         if nystroem.kmeans:
             # TODO: kmeans++
             # TODO: sparse kmeans
-            _, centers = kmeans(
-                train_inputs, nystroem.n_centers, device=train_inputs.device
-            )
+            _, centers = kmeans(train_inputs, nystroem.n_centers, device=train_inputs.device)
         else:
             # Choose random centers without replacement
             center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
@@ -36,9 +34,7 @@ def train_nystroem(nystroem, train_inputs):
 
         # TODO: Could we use a faster matrix decomposition instead of SVD, since `center_densities`
         #       is Hermitian?
-        center_densities = model.gaussian_kernel(
-            nystroem.centers, nystroem.centers, nystroem.gamma
-        )
+        center_densities = model.gaussian_kernel(nystroem.centers, nystroem.centers, nystroem.gamma)
         u, s, vh = torch.linalg.svd(center_densities)
         s = torch.clamp(s, min=1e-12)
         nystroem.normalization.copy_(torch.mm(u / s.sqrt(), vh).t())
@@ -81,9 +77,7 @@ def train_one_class(svm, train_inputs, val_inputs, batch_size=100, n_epochs=100)
         train_nystroem(svm.nystroem, train_inputs)
 
     weight_decay = nu / 2
-    optimizer = model.get_optimizer(
-        torch.optim.SGD, svm, weight_decay=weight_decay, lr=lr
-    )
+    optimizer = model.get_optimizer(torch.optim.SGD, svm, weight_decay=weight_decay, lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=verbose)
     min_val_loss = float("inf")
     min_val_state = svm.state_dict()
@@ -103,25 +97,17 @@ def train_one_class(svm, train_inputs, val_inputs, batch_size=100, n_epochs=100)
         with torch.no_grad():
             svm.eval()
             if verbose or epoch == n_epochs - 1:
-                print(
-                    f"Epoch {epoch}/{n_epochs} ({len(train_inputs)//1000}k samples per epoch)"
-                )
+                print(f"Epoch {epoch}/{n_epochs} ({len(train_inputs)//1000}k samples per epoch)")
                 print(f"Last batch loss {loss.item()}")
-                print(
-                    "Batch accuracy", torch.sum(batch_outputs > 0) / len(batch_outputs)
-                )
+                print("Batch accuracy", torch.sum(batch_outputs > 0) / len(batch_outputs))
 
             val_outputs = svm(val_inputs)
             weight_decay_loss = (weight_decay * 0.5) * svm.coefs.dot(svm.coefs)
-            val_loss = (
-                hinge_loss(val_outputs, margin) + nu * svm.bias + weight_decay_loss
-            )
+            val_loss = hinge_loss(val_outputs, margin) + nu * svm.bias + weight_decay_loss
             scheduler.step(val_loss)
             if verbose or epoch == n_epochs - 1:
                 print("Validation loss", val_loss)
-                print(
-                    "Validation accuracy", torch.sum(val_outputs > 0) / len(val_outputs)
-                )
+                print("Validation accuracy", torch.sum(val_outputs > 0) / len(val_outputs))
 
             if val_loss <= min_val_loss:
                 if min_val_loss < float("inf"):

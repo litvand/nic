@@ -36,9 +36,7 @@ def imgs_from_file(filename, n_imgs=-1):
         imgs = f.read(n_imgs * n_rows * n_cols)
 
     n_channels = 1
-    imgs = torch.frombuffer(imgs, dtype=torch.uint8).view(
-        n_imgs, n_channels, n_rows, n_cols
-    )
+    imgs = torch.frombuffer(imgs, dtype=torch.uint8).view(n_imgs, n_channels, n_rows, n_cols)
     imgs = imgs - TRAIN_PIXEL_MEAN
     imgs.mul_(1.0 / TRAIN_PIXEL_STDDEV)
     print("MNIST whitened mean, std", torch.mean(imgs), torch.std(imgs))
@@ -47,9 +45,7 @@ def imgs_from_file(filename, n_imgs=-1):
 
 def load_data(n_train, n_valid, device):
     """Returns (train_imgs, train_labels), (validation_imgs, validation_labels)."""
-    labels = labels_from_file("data/train-labels.idx1-ubyte", n_train + n_valid).to(
-        device
-    )
+    labels = labels_from_file("data/train-labels.idx1-ubyte", n_train + n_valid).to(device)
     imgs = imgs_from_file("data/train-images.idx3-ubyte", n_train + n_valid).to(device)
     return (imgs[:n_train], labels[:n_train]), (imgs[n_train:], labels[n_train:])
 
