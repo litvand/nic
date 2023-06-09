@@ -1,6 +1,9 @@
 import torch
 from torch import nn
 
+from mixture import mixture_densities
+import train
+
 
 class Zip(nn.Module):
     def __init__(self, modules):
@@ -28,28 +31,14 @@ def cat_layer_pairs(layers):
 
 
 class NIC(nn.Module):
-    @staticmethod
-    def load(filename):
-        n = NIC(None, [], [], [], None, None)
-        load(n, filename)
-        return n
-
-    def __init__(
-        self,
-        trained_model,
-        layers_normalize,
-        value_svms,
-        provenance_svms,
-        density_normalize,
-        final_svm,
-    ):
+    def __init__(self):
         super().__init__()
-        self.trained_model = trained_model
-        self.layers_normalize = Zip(layers_normalize)
-        self.value_svms = Zip(value_svms)
-        self.provenance_svms = Zip(provenance_svms)
-        self.density_normalize = density_normalize
-        self.final_svm = final_svm
+        self.trained_model = None
+        self.layers_normalize = None
+        self.value_svms = None
+        self.provenance_svms = None
+        self.density_normalize = None
+        self.final_svm = None
 
     def forward(self, batch):
         """
@@ -58,8 +47,8 @@ class NIC(nn.Module):
         """
         layers = [batch] + self.trained_model.activations(batch)
         layers = [layer.flatten(1) for layer in self.layers_normalize(layers)]
-        value_densities = self.value_svms(layers)
-        provenance_densities = self.provenance_svms(cat_layer_pairs(layers))
+        value_densities = self.value_detectors(layers)
+        provenance_densities = self.provenance_detectors(cat_layer_pairs(layers))
         densities = value_densities + provenance_densities
         densities = torch.cat([d.unsqueeze(1) for d in densities], dim=1)
         return self.final_svm(self.density_normalize(densities))
