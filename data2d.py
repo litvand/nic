@@ -1,63 +1,78 @@
+# 2d data for one-class classification
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+import train
 
-def preprocess(n_train, points, labels):
+
+def preprocess(n_train, points, targets):
     """NOTE: Number of returned training points is less than `n_train`, because negative training
     points are discarded."""
 
-    train_points = points[:n_train][labels[:n_train]]
-    val_points, val_labels = points[n_train:], labels[n_train:]
-
-    mean, inv_std = train_points.mean(), 1.0 / train_points.std()
-    train_points.sub_(mean).mul_(inv_std)
-    val_points.sub_(mean).mul_(inv_std)
-
-    return train_points, val_points, val_labels
+    train_points = points[:n_train][targets[:n_train]]
+    val_points, val_targets = points[n_train:], targets[n_train:]
+    normalize = train.Normalize(train_points[0]).fit(train_points)
+    return normalize(train_points), normalize(val_points), val_targets
 
 
 def circles(n_train, n_val, device):
     points = torch.randn((n_train + n_val, 2), device=device) * 4
     # Torch optimizes `pow(b)` for integer b in (-32, 32)
-    labels = (points[:, 0] - 1).pow(2) + (points[:, 1] - 1).pow(2) < 0.5
-    labels = labels | ((points[:, 0] + 1).pow(2) + (points[:, 1] + 1).pow(2) < 0.5)
-    return preprocess(n_train, points, labels)
+    targets = (points[:, 0] - 1).pow(2) + (points[:, 1] - 1).pow(2) < 0.5
+    targets = targets | ((points[:, 0] + 1).pow(2) + (points[:, 1] + 1).pow(2) < 0.5)
+    return preprocess(n_train, points, targets)
 
 
 def triangle(n_train, n_val, device):
     points = torch.rand(n_train + n_val, 2, device=device) * 4
     # Torch optimizes `pow(b)` for integer b in (-32, 32)
-    labels = 2 * points[:, 0] < points[:, 1]
-    return preprocess(n_train, points, labels)
+    targets = 2 * points[:, 0] < points[:, 1]
+    return preprocess(n_train, points, targets)
 
 
 def line(n_train, n_val, device):
     points = torch.randn((n_train + n_val, 2), device=device) * 4 + 1
-    labels = (points[:, 0] < 0) & (torch.abs(points[:, 0] - points[:, 1]) < 0.8)
-    return preprocess(n_train, points, labels)
+    targets = (points[:, 0] < 0) & (torch.abs(points[:, 0] - points[:, 1]) < 0.8)
+    return preprocess(n_train, points, targets)
 
 
 def hollow(n_train, n_val, device):
     points = torch.randn((n_train + n_val, 2), device=device) * 4
     dists = torch.norm(points, dim=1)
-    labels = (dists > 3) & (dists < 5)
-    return preprocess(n_train, points, labels)
+    targets = (dists > 3) & (dists < 5)
+    return preprocess(n_train, points, targets)
 
 
-def save(train_inputs, val_inputs, val_labels, name):
-    torch.save((train_inputs, val_inputs, val_labels), f"data/{name}.pt")
+def save(train_inputs, val_inputs, val_targets, name):
+    torch.save((train_inputs, val_inputs, val_targets), f"data/{name}.pt")
 
 
 def load(name):
-    train_inputs, val_inputs, val_labels = torch.load(f"data/{name}.pt")
-    return train_inputs, val_inputs, val_labels
+    train_inputs, val_inputs, val_targets = torch.load(f"data/{name}.pt")
+    return train_inputs, val_inputs, val_targets
 
 
-def scatter_labels_outputs(points, labels, outputs, model_name, centers=None):
-    pos = labels.detach().cpu().numpy()
+def _get_colors(outputs, min_output, max_output, channel):
+    colors = np.zeros((len(outputs), 3))
+    colors[:, channel] = (1e-9 + outputs - min_output) / (1e-9 + max_output - min_output)
+
+    if min_output < 0 and max_output <= 0:
+        colors[:, channel] = 1 - colors[:, channel]
+
+    colors[:, channel] = 0.4 + 0.6 * colors[:, channel]
+    return colors
+
+
+def scatter_outputs_targets(points, outputs, targets, model_name, centers=None):
+    points = points.detach().cpu().numpy()
+    outputs = outputs.detach().cpu().numpy()
+
+    pos = targets.detach().cpu().numpy()
     neg = np.logical_not(pos)
-    pos_output = outputs.detach().cpu().numpy() > 0
+    pos_output = outputs > 0
     neg_output = np.logical_not(pos_output)
 
     pos_pos_output = points[pos & pos_output]  # true positive
@@ -65,44 +80,30 @@ def scatter_labels_outputs(points, labels, outputs, model_name, centers=None):
     pos_neg_output = points[pos & neg_output]  # false negative
     neg_neg_output = points[neg & neg_output]  # true negative
 
+    pos_pos_outputs = outputs[pos & pos_output]  # true positive
+    neg_pos_outputs = outputs[neg & pos_output]  # false positive
+    pos_neg_outputs = outputs[pos & neg_output]  # false negative
+    neg_neg_outputs = outputs[neg & neg_output]  # true negative
+
+    min_pos_output = min(np.min(pos_pos_outputs, initial=0), np.min(neg_pos_outputs, initial=0))
+    max_pos_output = max(np.max(pos_pos_outputs, initial=0), np.max(neg_pos_outputs, initial=0))
+    min_neg_output = min(np.min(pos_neg_outputs, initial=0), np.min(neg_neg_outputs, initial=0))
+    max_neg_output = max(np.max(pos_neg_outputs, initial=0), np.max(neg_neg_outputs, initial=0))
+
+    red, green = 0, 1
+    pos_pos_colors = _get_colors(pos_pos_outputs, min_pos_output, max_pos_output, green)
+    neg_pos_colors = _get_colors(neg_pos_outputs, min_pos_output, max_pos_output, green)
+    pos_neg_colors = _get_colors(pos_neg_outputs, min_neg_output, max_neg_output, red)
+    neg_neg_colors = _get_colors(neg_neg_outputs, min_neg_output, max_neg_output, red)
+
     _, ax = plt.subplots()
-    ax.set_title(model_name + " (marker=label, color=output)")
+    ax.set_title(model_name + " (marker=target, color=output)")
     ax.set_aspect("equal", adjustable="box")
 
     plt.scatter(points[:, 0], points[:, 1], marker=",", c="0.8")
-    plt.scatter(pos_pos_output[:, 0], pos_pos_output[:, 1], marker="+", c="green")
-    plt.scatter(neg_pos_output[:, 0], neg_pos_output[:, 1], marker="v", c="green")
-    plt.scatter(pos_neg_output[:, 0], pos_neg_output[:, 1], marker="+", c="red")
-    plt.scatter(neg_neg_output[:, 0], neg_neg_output[:, 1], marker="v", c="red")
+    plt.scatter(pos_pos_output[:, 0], pos_pos_output[:, 1], marker="+", c=pos_pos_colors)
+    plt.scatter(neg_pos_output[:, 0], neg_pos_output[:, 1], marker="v", c=neg_pos_colors)
+    plt.scatter(pos_neg_output[:, 0], pos_neg_output[:, 1], marker="+", c=pos_neg_colors)
+    plt.scatter(neg_neg_output[:, 0], neg_neg_output[:, 1], marker="v", c=neg_neg_colors)
     if centers is not None:
         plt.scatter(centers[:, 0], centers[:, 1], marker=".", c="blue")
-
-
-def div_zero(a, b):
-    # 0 if a == b == 0
-    return a if a == 0 else a / b
-
-
-def percent(x):
-    return f"{round(100 * x.item(), 2)}%"
-
-
-def print_accuracy(labels, outputs, model_name):
-    outputs = outputs > 0
-    print(
-        f"{model_name} accuracy:",
-        percent(div_zero(torch.count_nonzero(outputs == labels), len(labels))),
-    )
-
-    on_pos, on_neg = outputs[labels], outputs[~labels]
-    acc_on_pos = div_zero(on_pos.count_nonzero(), len(on_pos))
-    acc_on_neg = div_zero(len(on_neg) - on_neg.count_nonzero(), len(on_neg))
-    print(f"{model_name} balanced accuracy:", percent((acc_on_pos + acc_on_neg) / 2))
-    print(
-        f"{model_name} true positives (as fraction of positive examples):",
-        percent(acc_on_pos),
-    )
-    print(
-        f"{model_name} true negatives (as fraction of negative examples):",
-        percent(acc_on_neg),
-    )

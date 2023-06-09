@@ -1,48 +1,92 @@
 from copy import deepcopy
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 
 # from sklearn.svm import OneClassSVM
 from sklearn.linear_model import SGDOneClassSVM
+from torch import nn
 
+import cluster
 import model
 
 
-def train_nystroem(nystroem, train_inputs):
-    assert nystroem.n_centers <= len(train_inputs), (
-        len(train_inputs),
-        nystroem.n_centers,
-    )
+def gaussian_kernel(inputs, centers, gamma):
+    square_distances = cluster.pairwise_sqr_dists(inputs.flatten(1), centers)
+    densities = torch.exp(-gamma * square_distances)  # n_inputs, n_centers
+    return densities
 
-    with torch.no_grad():
-        if nystroem.kmeans:
-            # TODO: kmeans++
-            # TODO: sparse kmeans
-            _, centers = kmeans(train_inputs, nystroem.n_centers, device=train_inputs.device)
-        else:
-            # Choose random centers without replacement
-            center_indices = torch.randperm(len(train_inputs))[: nystroem.n_centers]
-            centers = train_inputs[center_indices].flatten(1)
 
-        nystroem.centers.copy_(centers)
+class Nystroem(nn.Module):
+    """
+    Approximate a kernel by choosing (e.g. random/kmeans) centers and then normalizing.
 
-        n_features = train_inputs[0].numel()
-        var = train_inputs.var().item()
-        nystroem.gamma[0] = 1 / (n_features * var) if var > 0 else 1 / n_features
+    Currently the kernel is Gaussian, though other kernels are also possible.
+    """
 
-        # TODO: Could we use a faster matrix decomposition instead of SVD, since `center_densities`
-        #       is Hermitian?
-        center_densities = model.gaussian_kernel(nystroem.centers, nystroem.centers, nystroem.gamma)
-        u, s, vh = torch.linalg.svd(center_densities)
-        s = torch.clamp(s, min=1e-12)
-        nystroem.normalization.copy_(torch.mm(u / s.sqrt(), vh).t())
+    def __init__(self, example_input, n_centers, kmeans=True):
+        super().__init__()
+        # Use kmeans to choose centers. Generally n_centers needs to be larger if kmeans=False.
+        self.kmeans = kmeans
+        self.n_centers = n_centers
+        self.gamma = nn.Parameter(torch.zeros(1), requires_grad=False)
+        self.centers = nn.Parameter(
+            torch.zeros(n_centers, example_input.numel()), requires_grad=False
+        )
+        self.normalization = nn.Parameter(torch.zeros(n_centers, n_centers), requires_grad=False)
+
+    def forward(self, inputs):
+        densities = gaussian_kernel(inputs, self.centers, self.gamma)
+        normalized = torch.mm(densities, self.normalization)
+        return normalized
+
+    def fit(self, train_inputs):
+        assert self.n_centers <= len(train_inputs), (
+            len(train_inputs),
+            self.n_centers,
+        )
+
+        with torch.no_grad():
+            if self.kmeans:
+                # TODO: kmeans++
+                # TODO: sparse kmeans
+                _, centers = cluster.kmeans_farthest(
+                    train_inputs, self.n_centers, device=train_inputs.device
+                )
+            else:
+                # Choose random centers without replacement
+                center_indices = torch.randperm(len(train_inputs))[: self.n_centers]
+                centers = train_inputs[center_indices].flatten(1)
+
+            self.centers.copy_(centers)
+
+            n_features = train_inputs[0].numel()
+            var = train_inputs.var().item()
+            self.gamma[0] = 1 / (n_features * var) if var > 0 else 1 / n_features
+
+            # TODO: Could we use a faster matrix decomposition instead of SVD, since
+            #       `center_densities` is Hermitian?
+            center_densities = model.gaussian_kernel(self.centers, self.centers, self.gamma)
+            u, s, vh = torch.linalg.svd(center_densities)
+            s = torch.clamp(s, min=1e-12)
+            self.normalization.copy_(torch.mm(u / s.sqrt(), vh).t())
 
 
 # TODO: Leaky hinge loss or some other way to increase accuracy on basic triangle example?
 def hinge_loss(outputs, margin):
     return torch.clamp(margin - outputs, min=0).mean()
+
+
+class SVM(nn.Module):
+    def __init__(self, example_input, n_centers, rbf=True):
+        super().__init__()
+        self.nystroem = Nystroem(example_input, n_centers) if rbf else None
+        self.coefs = nn.Parameter(torch.rand(n_centers) - 0.5)
+        self.bias = nn.Parameter(torch.Tensor([0]))
+
+    def forward(self, inputs):
+        if self.nystroem is not None:
+            inputs = self.nystroem(inputs)
+        return torch.mv(inputs, self.coefs) + self.bias
 
 
 def train_one_class(svm, train_inputs, val_inputs, batch_size=100, n_epochs=100):
@@ -54,8 +98,8 @@ def train_one_class(svm, train_inputs, val_inputs, batch_size=100, n_epochs=100)
     Replicates sklearn OneClassSVM given same parameters.
 
     svm: SVM to train
-    train_inputs: Positive training inputs; no labels since one class
-    val_inputs: Positive validation inputs; no labels since one class
+    train_inputs: Positive training inputs; no targets since one class
+    val_inputs: Positive validation inputs; no targets since one class
     no_false_negatives: Whether to postprocess bias so that the output is positive for all training
                         inputs, i.e. so that there are no false negatives.
     lr: Learning rate
@@ -74,7 +118,7 @@ def train_one_class(svm, train_inputs, val_inputs, batch_size=100, n_epochs=100)
     print("Training SVM")
     svm.train()
     if svm.nystroem is not None:
-        train_nystroem(svm.nystroem, train_inputs)
+        svm.nystroem.fit(train_inputs)
 
     weight_decay = nu / 2
     optimizer = model.get_optimizer(torch.optim.SGD, svm, weight_decay=weight_decay, lr=lr)
@@ -132,10 +176,10 @@ def train_one_class(svm, train_inputs, val_inputs, batch_size=100, n_epochs=100)
 
 if __name__ == "__main__":
     device = "cpu"
-    (inputs, labels), n_train = line_data(2000, device), 1000
-    # Only training inputs with positive labels
-    train_inputs = inputs[:n_train][labels[:n_train]]
-    val_inputs, val_labels = inputs[n_train:], labels[n_train:]
+    (inputs, targets), n_train = line_data(2000, device), 1000
+    # Only training inputs with positive targets
+    train_inputs = inputs[:n_train][targets[:n_train]]
+    val_inputs, val_targets = inputs[n_train:], targets[n_train:]
 
     normalize = model.Normalize(train_inputs.min(0)[0], train_inputs.std(0))
     train_inputs, val_inputs = normalize(train_inputs), normalize(val_inputs)
@@ -145,7 +189,7 @@ if __name__ == "__main__":
     # train_inputs, val_inputs = nystroem(train_inputs), nystroem(val_inputs)
 
     torch_svm = model.SVM(train_inputs[0], 2, rbf=False).to(device)
-    train_one_class(torch_svm, train_inputs, val_inputs[val_labels])
+    train_one_class(torch_svm, train_inputs, val_inputs[val_targets])
     model.save(torch_svm, "svm")
     print(*torch_svm.named_parameters())
 
@@ -158,12 +202,12 @@ if __name__ == "__main__":
     with torch.no_grad():
         torch_val_outputs = torch_svm(val_inputs).detach().cpu().numpy()
         val_inputs = val_inputs.detach().cpu().numpy()
-        val_labels = val_labels.detach().cpu().numpy()
-        # val_labels = np.full(len(val_inputs), True)
-        print_results(val_labels, torch_val_outputs, "torch")
+        val_targets = val_targets.detach().cpu().numpy()
+        # val_targets = np.full(len(val_inputs), True)
+        print_results(val_targets, torch_val_outputs, "torch")
         plot_results(
             val_inputs,
-            val_labels,
+            val_targets,
             torch_val_outputs,
             "torch",
             torch_svm.nystroem.centers.detach().cpu().numpy(),
@@ -171,6 +215,6 @@ if __name__ == "__main__":
 
         if sk_svm is not None:
             sk_val_outputs = sk_svm.predict(val_inputs)
-            print_results(val_labels, sk_val_outputs, "sk")
-            plot_results(val_inputs, val_labels, sk_val_outputs, "sk")
+            print_results(val_targets, sk_val_outputs, "sk")
+            plot_results(val_inputs, val_targets, sk_val_outputs, "sk")
         plt.show()
