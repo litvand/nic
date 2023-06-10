@@ -53,7 +53,7 @@ def bin_acc(outputs, targets):
         len(on_neg) - on_neg.count_nonzero(),
     )
     print("len outputs, targets", len(outputs), len(targets), targets)
-    print("outputs[0]", outputs[0], outputs[0] == 0, outputs[0] == 1)
+    print("outputs[0]", outputs[0], outputs[0] == 0, outputs[0] == 1, outputs[:1].count_nonzero())
 
     balanced = (acc_on_pos + acc_on_neg) / 2
     return acc, balanced, acc_on_pos, acc_on_neg
