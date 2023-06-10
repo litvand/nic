@@ -9,10 +9,10 @@ import train
 
 
 class DetectorMixture(nn.Module):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.mixture = GaussianMixture(*args, **kwargs)
-        self.threshold = nn.Parameter(torch.nan, requires_grad=False)
+        self.mixture = GaussianMixture(**kwargs)
+        self.threshold = nn.Parameter(torch.tensor(torch.nan), requires_grad=False)
 
     def forward(self, points):
         return self.densities(points) - self.threshold
