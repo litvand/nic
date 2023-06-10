@@ -1,3 +1,4 @@
+from tkinter import N
 import matplotlib.pyplot as plt
 import torch
 
@@ -45,8 +46,24 @@ def bin_acc(outputs, targets):
     acc_on_pos = div_zero(on_pos.count_nonzero(), len(on_pos))
     acc_on_neg = div_zero(len(on_neg) - on_neg.count_nonzero(), len(on_neg))
 
+    print(
+        "Binary counts",
+        torch.count_nonzero(outputs == targets),
+        on_pos.count_nonzero(),
+        len(on_neg) - on_neg.count_nonzero(),
+    )
+
     balanced = (acc_on_pos + acc_on_neg) / 2
     return acc, balanced, acc_on_pos, acc_on_neg
+
+
+"""
+acc = (correct_on_pos + correct_on_neg) / (n_on_pos + n_on_neg)
+balanced_acc = (correct_on_pos/n_on_pos + correct_on_neg/n_on_neg)/2
+if n_on_pos == n_on_neg:
+    acc = (correct_on_pos + correct_on_neg) / (2 * n_on_pos)
+    balanced_acc = ((correct_on_pos + correct_on_neg) / n_on_pos)/2
+"""
 
 
 def print_bin_acc(outputs, targets, model_name):
@@ -59,10 +76,7 @@ def print_bin_acc(outputs, targets, model_name):
     """
 
     acc, balanced, acc_on_pos, acc_on_neg = bin_acc(outputs, targets)
-    print(
-        f"{model_name} accuracy:",
-        percent(acc),
-    )
+    print(f"{model_name} accuracy:", percent(acc))
     print(f"{model_name} balanced accuracy:", percent(balanced))
     print(f"{model_name} true positives (as fraction of positive targets):", percent(acc_on_pos))
     print(f"{model_name} true negatives (as fraction of negative targets):", percent(acc_on_neg))
