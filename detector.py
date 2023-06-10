@@ -126,13 +126,13 @@ if __name__ == "__main__":
             eval.div_zero(torch.sum(prs_on_adv < threshold), len(prs_on_adv)),
         )
     print("Detector threshold", detector.threshold)
-    eval.plot_distr_overlap(
-        prs_on_adv,
-        prs_on_original,
-        "Detector net on validation adversarial",
-        "original images"
-    )
-    plt.show()
+    # eval.plot_distr_overlap(
+    #     prs_on_adv,
+    #     prs_on_original,
+    #     "Detector net on validation adversarial",
+    #     "original images"
+    # )
+    # plt.show()
 
 # Fully connected detector taking just the raw image as input can detect 90% of adversarial images
 # while classifying 90% of normal images correctly, or detect 50% of adversarial images while
