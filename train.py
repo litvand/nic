@@ -38,7 +38,7 @@ def load(model, filename):
 def activations_at(sequential, inputs, module_indices):
     """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
 
-    sequential = list(sequential.modules())
+    sequential = list(sequential.children())
     activations = []
     for i_module, module in enumerate(sequential):
         inputs = module(inputs)

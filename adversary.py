@@ -8,6 +8,32 @@ import mnist
 import train
 
 
+def fgsm_detector_data(imgs, targets, trained_model, eps):
+    """
+    Generate data for training/evaluating FGSM detector.
+
+    imgs: Original dataset images (won't be modified)
+    targets: Original dataset targets as class indices
+    trained_model: Model trained to classify the original dataset
+    eps: FGSM epsilon to use when generating the new dataset
+
+    Returns: detector_imgs, detector_targets
+             Detector target is 0 if the image is adversarial and 1 otherwise.
+    """
+
+    n_imgs = len(imgs)
+    n_adv = n_imgs // 2  # Number of images to adversarially modify
+
+    detector_imgs = imgs.clone()
+    fgsm_(detector_imgs[:n_adv], targets[:n_adv], trained_model, eps)
+
+    detector_targets = torch.zeros_like(targets)
+    detector_targets[n_adv:].fill_(1)
+
+    perm = torch.randperm(n_imgs)  # Don't have all adversarial images at the start
+    return detector_imgs[perm], detector_targets[perm]
+
+
 def fgsm_(imgs, targets, trained_model, eps, aim_class=None):
     """
     imgs: Float tensor with size (n_images, n_channels, height, width)

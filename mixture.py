@@ -34,12 +34,12 @@ class DetectorMixture(nn.Module):
 
 if __name__ == "__main__":
     device = "cuda"
-    train_points, val_points, val_targets = data2d.hollow(5000, 5000, device, 4)
+    train_points, val_points, val_targets = data2d.hollow(5000, 5000, device, 100)
     whiten = train.Whiten(train_points[0]).fit(train_points)
     train_points, val_points = whiten(train_points), whiten(val_points)
     val_targets = val_targets.detach().cpu()
 
-    n_runs = 5
+    n_runs = 1
     balanced_accs = torch.zeros(n_runs)
     for i_run in range(n_runs):
         print(f"-------------------------------- Run {i_run} --------------------------------")
@@ -57,26 +57,25 @@ if __name__ == "__main__":
     # More detailed results from the last run
     print(f"Number of positive training points: {len(train_points)}")
     print("Density threshold:", detector.threshold)
-    # exit(0)
-    data2d.scatter_outputs_targets(
-        train_points,
-        detector(train_points),
-        torch.ones(len(train_points), dtype=torch.bool),
-        "Training data",
-        # There doesn't seem to be a nice way to get the means
-        centers=detector.mixture.model_.means,
-    )
-    data2d.scatter_outputs_targets(
-        val_points,
-        val_outputs,
-        val_targets,
-        "pycave GMM validation",
-        centers=detector.mixture.model_.means,
-    )
-    eval.plot_distr_overlap(
-        val_outputs[val_targets],
-        val_outputs[~val_targets],
-        "Validation positive",
-        "negative point thresholded densities",
-    )
+    # data2d.scatter_outputs_targets(
+    #     train_points,
+    #     detector(train_points),
+    #     torch.ones(len(train_points), dtype=torch.bool),
+    #     "Training data",
+    #     # There doesn't seem to be a nice way to get the means
+    #     centers=detector.mixture.model_.means,
+    # )
+    # data2d.scatter_outputs_targets(
+    #     val_points,
+    #     val_outputs,
+    #     val_targets,
+    #     "pycave GMM validation",
+    #     centers=detector.mixture.model_.means,
+    # )
+    # eval.plot_distr_overlap(
+    #     val_outputs[val_targets],
+    #     val_outputs[~val_targets],
+    #     "Validation positive",
+    #     "negative point thresholded densities",
+    # )
     plt.show()

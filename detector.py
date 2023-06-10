@@ -53,8 +53,8 @@ class DetectorNet(nn.Module):
         """
 
         self.last_detector_data = detector_data = (
-            fgsm_detector_data(*data[0], trained_model, eps),
-            fgsm_detector_data(*data[1], trained_model, eps),
+            adversary.fgsm_detector_data(*data[0], trained_model, eps),
+            adversary.fgsm_detector_data(*data[1], trained_model, eps),
         )
         train.logistic_regression(self.seq, detector_data, init=True)
         with torch.no_grad():
@@ -64,32 +64,6 @@ class DetectorNet(nn.Module):
             )
 
         return self
-
-
-def fgsm_detector_data(imgs, targets, trained_model, eps):
-    """
-    Generate data for training/evaluating FGSM detector.
-
-    imgs: Original dataset images
-    targets: Original dataset targets as class indices
-    trained_model: Model trained to classify the original dataset
-    eps: FGSM epsilon to use when generating the new dataset
-
-    Returns: detector_imgs, detector_targets
-             Detector target is 0 if the image is adversarial and 1 otherwise.
-    """
-
-    n_imgs = len(imgs)
-    n_adv = n_imgs // 2  # Number of images to adversarially modify
-
-    detector_imgs = imgs.clone()
-    adversary.fgsm_(detector_imgs[:n_adv], targets[:n_adv], trained_model, eps)
-
-    detector_targets = torch.zeros_like(targets)
-    detector_targets[n_adv:].fill_(1)
-
-    perm = torch.randperm(n_imgs)  # Don't have all adversarial images at the start
-    return detector_imgs[perm], detector_targets[perm]
 
 
 if __name__ == "__main__":
@@ -104,12 +78,12 @@ if __name__ == "__main__":
 
     detector = DetectorNet(example_img).to(device)  # .fit(data, trained_model, eps=0.2)
     # train.save(detector, "detector-net20k")
-    # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5.pt")
-    detector_val_imgs, detector_val_targets = fgsm_detector_data(
+
+    # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
+    detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
         data[1][0], data[1][1], trained_model, 0.2
     )
-
     with torch.no_grad():
         detector.eval()
         val_prs = detector.prs(detector_val_imgs)
@@ -135,7 +109,7 @@ if __name__ == "__main__":
 # classifying only 3% of normal images correctly.
 
 # fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2
-# detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5
+# detector-net-onfc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5
 # (All nets trained with restarts.)
 # Threshold 0.4996219873428345 accuracy: 87.35%
 # Threshold 0.4996219873428345 true positives (as fraction of positive targets): 90.6%

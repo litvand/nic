@@ -1,5 +1,6 @@
 # 2d data for one-class classification
 
+import math
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,7 +43,7 @@ def line(n_train, n_val, device):
 def hollow(n_train, n_val, device, n_dim=2):
     points = torch.randn((n_train + n_val, n_dim), device=device) * 4
     dists = torch.norm(points, dim=1)
-    targets = (dists > 3) & (dists < 5)
+    targets = (dists > 3 * math.sqrt(n_dim)) & (dists < 5 * math.sqrt(n_dim))
     return preprocess(n_train, points, targets)
 
 
