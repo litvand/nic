@@ -105,15 +105,17 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     _, (imgs, targets) = mnist.load_data(n_train=22000, n_val=5000, device=device)
 
-    m = classifier.PoolNet(imgs[0]).to(device)
-    train.load(m, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
-    m.eval()
-    eval.print_multi_acc(m(imgs), targets, "Original")
+    net = classifier.PoolNet(imgs[0]).to(device)
+    train.load(net, "pool-restart20k-615826bb2a224107592901df35cf2c5bc9402331.pt")
+    net.eval()
+    with torch.no_grad():
+        eval.print_multi_acc(net(imgs), targets, "Original")
 
     eps = 0.2
     unaimed_imgs = imgs.clone()
-    fgsm_(unaimed_imgs, targets, m, eps)
-    eval.print_multi_acc(m(unaimed_imgs), targets, f"Unaimed (eps={eps})")
+    fgsm_(unaimed_imgs, targets, net, eps)
+    with torch.no_grad():
+        eval.print_multi_acc(net(unaimed_imgs), targets, f"Unaimed (eps={eps})")
 
-    # cmp_by_aim(imgs, targets, m, eps)
-    # cmp_single(-1, imgs, targets, m, eps)
+    # cmp_by_aim(imgs, targets, net, eps)
+    cmp_single(-1, imgs, targets, net, eps)

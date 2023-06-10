@@ -172,6 +172,9 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     (train_inputs, train_targets), (val_inputs, val_targets) = data
     net.train()
 
+    # Restarts seem to increase accuracy on the original validation images, but
+    # decrease accuracy on adversarial validation images.
+    restarts = True
     min_lr = 1e-8  # Early stop if LR becomes too low
     optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -181,8 +184,8 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
         verbose=True
     )
     min_val_loss = float("inf")
-    min_val_state = net.state_dict()
-    min_val_optim_state = optimizer.state_dict()
+    min_val_state = net.state_dict()  # Not worth deepcopying
+    min_val_optim_state = optimizer.state_dict() if restarts else None
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_inputs))
@@ -217,14 +220,15 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             eval.print_multi_acc(val_outputs, val_targets, "Validation")
 
             if val_loss <= min_val_loss:
-                min_val_state = deepcopy(net.state_dict())
                 min_val_loss = val_loss
+                min_val_state = deepcopy(net.state_dict())
+                min_val_optim_state = deepcopy(optimizer.state_dict()) if restarts else None
 
             prev_lr = optimizer.param_groups[0]["lr"]
             scheduler.step(val_loss)
             if all(g["lr"] < min_lr for g in optimizer.param_groups):
                 break
-            elif optimizer.param_groups[0]["lr"] < prev_lr:
+            elif restarts and optimizer.param_groups[0]["lr"] < prev_lr:
                 net.load_state_dict(min_val_state)
                 # Reset optimizer state, but not learning rate
                 min_val_optim_state["param_groups"] = optimizer.param_groups
