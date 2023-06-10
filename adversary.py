@@ -106,7 +106,7 @@ if __name__ == "__main__":
     _, (imgs, targets) = mnist.load_data(n_train=22000, n_val=5000, device=device)
 
     net = classifier.PoolNet(imgs[0]).to(device)
-    train.load(net, "pool-restart20k-615826bb2a224107592901df35cf2c5bc9402331.pt")
+    train.load(net, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca.pt")
     net.eval()
     with torch.no_grad():
         eval.print_multi_acc(net(imgs), targets, "Original")

@@ -100,8 +100,8 @@ if __name__ == "__main__":
     data = mnist.load_data(n_train=20000, n_val=2000, device=device)
     example_img = data[0][0][0]
 
-    trained_model = classifier.PoolNet(example_img).to(device)
-    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca.pt")
+    trained_model = classifier.FullyConnected(example_img).to(device)
+    train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2.pt")
 
     detector = DetectorNet(example_img).to(device).fit(data, trained_model, eps=0.2)
     train.save(detector, "detector-net20k")
