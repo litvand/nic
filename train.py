@@ -155,7 +155,7 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
     return optimizer
 
 
-def gradient_noise(model, i_input, initial_variance=0.01):
+def gradient_noise(model, i_input, initial_variance=0.001):
     with torch.no_grad():
         std = math.sqrt(initial_variance / (1 + i_input / 100) ** 0.55)
         for param in model.parameters():
