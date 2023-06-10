@@ -114,7 +114,7 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
     https://github.com/karpathy/minGPT/blob/3ed14b2cec0dfdad3f4b2831f2b4a86d11aef150/mingpt/model.py#L136
     """
 
-    whitelist_modules = ("Linear", "Conv")
+    whitelist_modules = ("Conv", "Linear", "Bilinear")
     blacklist_modules = ("LayerNorm", "BatchNorm", "Embedding")
 
     decay, no_decay = [], []
@@ -166,15 +166,15 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     """
     net: Should output logits for each class
     data: Training and validation inputs and targets, where targets are class indices.
-    init: Whether to initialize the net with random values
+    init: Whether to initialize the net with random weights
     """
 
     (train_inputs, train_targets), (val_inputs, val_targets) = data
     net.train()
 
     min_lr = 1e-8  # Early stop if LR becomes too low
-    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-6, lr=0.1)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, eps=0)
+    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, eps=0, min_lr=min_lr / 2)
     min_val_loss = float("inf")
     min_val_state = net.state_dict()
 
@@ -189,8 +189,8 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
         loss = None
         for i_input in range(0, len(train_inputs), batch_size):
-            batch_inputs = train_inputs[i_input: i_input + batch_size]
-            batch_targets = train_targets[i_input: i_input + batch_size]
+            batch_inputs = train_inputs[i_input : i_input + batch_size]
+            batch_targets = train_targets[i_input : i_input + batch_size]
             batch_outputs = net(batch_inputs)
 
             loss = F.cross_entropy(batch_outputs, batch_targets)

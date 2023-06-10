@@ -7,7 +7,7 @@ import torch
 def LSUV_(
     model,
     data,
-    apply_only_to=["Conv", "Linear", "Bilinear"],
+    apply_only_to=("Conv", "Linear", "Bilinear"),
     std_tol=0.1,
     max_iters=10,
     do_ortho_init=True,

@@ -26,6 +26,8 @@ def fgsm_(imgs, targets, trained_model, eps, aim_class=None):
     for p in trained_model.parameters():
         required_grad.append(p.requires_grad)
         p.requires_grad = False
+    
+    trained_model.eval()
 
     chunk_size = 2000  # TODO: Choose maximum size that fits in GPU memory
     for i_first in range(0, len(imgs), chunk_size):

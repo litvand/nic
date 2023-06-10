@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 
 
-def plot_distr_overlap(a, b, a_name='', b_name=''):
+def plot_distr_overlap(a, b, a_name="", b_name=""):
     """
     Plot cumulative distribution functions of two sets of numbers
 
@@ -59,7 +59,10 @@ def print_bin_acc(outputs, targets, model_name):
     """
 
     acc, balanced, acc_on_pos, acc_on_neg = bin_acc(outputs, targets)
-    print(f"{model_name} accuracy:", percent(acc),)
+    print(
+        f"{model_name} accuracy:",
+        percent(acc),
+    )
     print(f"{model_name} balanced accuracy:", percent(balanced))
     print(f"{model_name} true positives (as fraction of positive targets):", percent(acc_on_pos))
     print(f"{model_name} true negatives (as fraction of negative targets):", percent(acc_on_neg))

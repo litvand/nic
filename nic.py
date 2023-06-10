@@ -29,6 +29,7 @@ def cat_layer_pairs(layers):
         ends = n_layer_features.cumsum()
     return [cat_all[:, ends[i] - n_layer_features[i] : ends[i + 1]] for i in range(len(layers) - 1)]
 
+
 def get_whitened_layers(whitening, trained_model, batch):
     layers = [batch] + trained_model.activations(batch)
     return whitening(layer.flatten(1) for layer in layers)
@@ -61,7 +62,7 @@ class NIC(nn.Module):
                        `trained_model`. Must have `activations` method that returns activations of
                        last layer and optionally activations of some earlier layers.
         """
-        
+
         trained_model.eval()
         layers = get_whitened_layers(self.whitening, trained_model, batch)
         value_densities = self.value_detectors(layers)
@@ -90,30 +91,24 @@ class NIC(nn.Module):
         trained_model.eval()
 
         detector_args = {
-            'num_components': min(300, 2 + len(train_inputs) // 50),
-            'covariance_type': "spherical",
-            'init_strategy': "kmeans",
-            'batch_size': 5000  # Largest size that fits in memory
+            "num_components": min(300, 2 + len(train_inputs) // 50),
+            "covariance_type": "spherical",
+            "init_strategy": "kmeans",
+            "batch_size": 5000,  # Largest size that fits in memory
         }
-        
+
         with torch.no_grad():
             print("Whiten NIC layers")
             train_layers = [train_inputs] + trained_model.activations(train_inputs)
-            self.whitening = Zip([
-                train.Whiten(layer[0]).fit(layer) for layer in train_layers
-            ])
+            self.whitening = Zip([train.Whiten(layer[0]).fit(layer) for layer in train_layers])
             train_layers = self.whitening([layer.flatten(1) for layer in train_layers])
             val_layers = get_whitened_layers(self.whitening, trained_model, val_inputs)
-        
+
         self.value_detectors, train_value_densities = train_layer_detectors(
             train_layers, detector_args, "Value"
         )
         self.layer_classifiers, train_logits = train_layer_classifiers(
-            train_layers,
-            train_targets,
-            val_layers,
-            val_targets,
-            n_classes=train_layers[-1].size(1)
+            train_layers, train_targets, val_layers, val_targets, n_classes=train_layers[-1].size(1)
         )
         self.prov_detectors, train_prov_densities = train_layer_detectors(
             cat_layer_pairs(train_logits), detector_args, "Provenance"
@@ -155,6 +150,6 @@ def train_layer_detectors(train_layers, detector_args, detector_name):
 
         train_densities.append(detector.fit_predict(train_layer))
         detectors.append(detector)
-    
+
     detectors = Zip(detectors)
     return detectors, train_densities

@@ -13,23 +13,24 @@ class DetectorMixture(nn.Module):
         super().__init__()
         self.mixture = GaussianMixture(*args, **kwargs)
         self.threshold = nn.Parameter(torch.zeros(1), requires_grad=False)
-    
+
     def forward(self, points):
         return self.densities(points) - self.threshold
 
-    def fit(self, train_points):  # TODO: Rename to `train`?
-        self.fit_predict(train_points)
-        return self
-
-    def fit_predict(self, train_points):  # TODO: Rename to `train_forward`?
-        self.mixture.fit(train_points)
-        densities = self.densities(train_points)
-        self.threshold[0] = densities.min()
-        return densities - self.threshold
-    
     def densities(self, points):
         """Density of learned distribution at each point (ignoring which component it's from)"""
         return torch.exp(-self.mixture.score_samples(points).flatten())
+
+    def fit(self, train_points):
+        self.fit_predict(train_points)
+        return self
+
+    def fit_predict(self, train_points):
+        self.mixture.fit(train_points)
+        densities = self.densities(train_points)
+        self.threshold[0] = densities.min().item()
+        self.threshold.to(densities.device)
+        return densities - self.threshold
 
 
 if __name__ == "__main__":
@@ -77,6 +78,6 @@ if __name__ == "__main__":
         val_outputs[val_targets],
         val_outputs[~val_targets],
         "Validation positive",
-        "negative point thresholded densities"
+        "negative point thresholded densities",
     )
     plt.show()
