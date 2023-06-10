@@ -114,7 +114,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         detector.eval()
         val_prs = detector.prs(detector_val_imgs)
-        thresholds = [detector.threshold.item()] + [i/10 for i in range(1, 10)]
+        thresholds = [detector.threshold.item()] + [i/10 for i in range(1, 10)] + [0.99, 0.999]
         for threshold in thresholds:
             eval.print_bin_acc(
                 val_prs - threshold,
