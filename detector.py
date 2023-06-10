@@ -93,7 +93,6 @@ def fgsm_detector_data(imgs, targets, trained_model, eps):
 
 
 if __name__ == "__main__":
-    train.git_commit()
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -134,3 +133,22 @@ if __name__ == "__main__":
 # while classifying 90% of normal images correctly, or detect 50% of adversarial images while
 # classifying 99.5% of normal images correctly. Detecting 99% of adversarial images would mean
 # classifying only 3% of normal images correctly.
+
+# fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2
+# detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5
+# (All nets trained with restarts.)
+# Threshold 0.4996219873428345 accuracy: 87.35%
+# Threshold 0.4996219873428345 true positives (as fraction of positive targets): 90.6%
+# Threshold 0.4996219873428345 true negatives (as fraction of negative targets): 84.1%
+# Threshold 0.1 accuracy: 82.6%
+# Threshold 0.1 true positives (as fraction of positive targets): 99.0%
+# Threshold 0.1 true negatives (as fraction of negative targets): 66.2%
+# Threshold 0.2 accuracy: 86.0%
+# Threshold 0.2 true positives (as fraction of positive targets): 97.6%
+# Threshold 0.2 true negatives (as fraction of negative targets): 74.4%
+# Threshold 0.7 accuracy: 86.0%
+# Threshold 0.7 true positives (as fraction of positive targets): 82.5%
+# Threshold 0.7 true negatives (as fraction of negative targets): 89.5%
+# Threshold 0.99 accuracy: 56.3%
+# Threshold 0.99 true positives (as fraction of positive targets): 13.5%
+# Threshold 0.99 true negatives (as fraction of negative targets): 99.1%

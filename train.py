@@ -14,7 +14,7 @@ from lsuv import LSUV_
 
 
 def git_commit():
-    """Can look at exact parameters and data that the model was trained on using the commit."""
+    """Can look at exact parameters and data that a model was trained on using the commit."""
 
     repo = git.Repo()
     if repo.active_branch.name == "main":  # Don't clutter the main branch.
@@ -23,12 +23,12 @@ def git_commit():
 
     repo.git.add(".")
     repo.git.commit("-m", "_Automated commit")
+    return repo.head.object.hexsha
 
 
 def save(model, model_name):
-    # Can look at exact parameters and data that the model was trained on using the commit.
-    last_commit = git.Repo().head.object.hexsha
-    torch.save(model.state_dict(), f"models/{model_name}-{last_commit}.pt")
+    last_commit = git_commit()
+    torch.save(model.cpu().state_dict(), f"models/{model_name}-{last_commit}.pt")
 
 
 def load(model, filename):
