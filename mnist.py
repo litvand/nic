@@ -45,13 +45,13 @@ def imgs_from_file(filename, n_imgs=-1):
 
 def load_data(n_train, n_val, device):
     """Returns (train_imgs, train_targets), (validation_imgs, validation_targets)."""
-    targets = targets_from_file("data/train-targets.idx1-ubyte", n_train + n_val).to(device)
+    targets = targets_from_file("data/train-labels.idx1-ubyte", n_train + n_val).to(device)
     imgs = imgs_from_file("data/train-images.idx3-ubyte", n_train + n_val).to(device)
     return (imgs[:n_train], targets[:n_train]), (imgs[n_train:], targets[n_train:])
 
 
 if __name__ == "__main__":
-    targets = targets_from_file("data/train-targets.idx1-ubyte")
+    targets = targets_from_file("data/train-labels.idx1-ubyte")
     imgs = imgs_from_file("data/train-images.idx3-ubyte", 1)
 
     print(f"n_imgs: {len(targets)}, targets:", targets)
