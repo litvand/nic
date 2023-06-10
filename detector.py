@@ -101,15 +101,15 @@ if __name__ == "__main__":
     example_img = data[0][0][0]
 
     trained_model = classifier.PoolNet(example_img).to(device)
-    train.load(trained_model, "pool-restart20k-615826bb2a224107592901df35cf2c5bc9402331.pt")
+    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca.pt")
 
-    detector = DetectorNet(example_img).to(device)  # .fit(data, trained_model, eps=0.2)
-    # train.save(detector, "detector-net20k")
-    # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
-    train.load(detector, "detector-net20k-2746a09f6d3607a8398db91de5625666ec429d67.pt")
-    detector_val_imgs, detector_val_targets = fgsm_detector_data(
-        data[1][0], data[1][1], trained_model, 0.2
-    )
+    detector = DetectorNet(example_img).to(device).fit(data, trained_model, eps=0.2)
+    train.save(detector, "detector-net20k")
+    detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
+    # train.load(detector, "detector-net20k-2746a09f6d3607a8398db91de5625666ec429d67.pt")
+    # detector_val_imgs, detector_val_targets = fgsm_detector_data(
+    #     data[1][0], data[1][1], trained_model, 0.2
+    # )
 
     with torch.no_grad():
         detector.eval()
