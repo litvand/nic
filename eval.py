@@ -36,7 +36,6 @@ def bin_acc(outputs, targets):
 
     outputs: Float tensor (n_outputs); positive output <--> positive class.
     targets: Boolean tensor (n_outputs); target True <--> positive class.
-    model_name: String
     """
 
     outputs = outputs > 0

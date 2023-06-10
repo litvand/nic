@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 
-from mixture import mixture_densities
 import train
+from mixture import DetectorMixture
 
 
 class Zip(nn.Module):
@@ -10,8 +10,8 @@ class Zip(nn.Module):
         super().__init__()
         self.modules = modules
 
-    def forward(self, inputs_list):
-        return [m(inputs) for m, inputs in zip(self.modules, inputs_list)]
+    def forward(self, inputs_iter):
+        return [m(inputs) for m, inputs in zip(self.modules, inputs_iter)]
 
 
 def cat_layer_pairs(layers):
@@ -29,110 +29,132 @@ def cat_layer_pairs(layers):
         ends = n_layer_features.cumsum()
     return [cat_all[:, ends[i] - n_layer_features[i] : ends[i + 1]] for i in range(len(layers) - 1)]
 
+def get_whitened_layers(whitening, trained_model, batch):
+    layers = [batch] + trained_model.activations(batch)
+    return whitening(layer.flatten(1) for layer in layers)
+
+
+def cat_features(features):
+    """
+    List of n_features tensors with shape (n_points) --> tensor with shape (n_points, n_features)
+    """
+    return torch.cat([f.unsqueeze(1) for f in features], dim=1)
+
 
 class NIC(nn.Module):
     def __init__(self):
         super().__init__()
-        self.trained_model = None
-        self.layers_normalize = None
-        self.value_svms = None
-        self.provenance_svms = None
-        self.density_normalize = None
-        self.final_svm = None
+        self.whitening = None
+        self.value_detectors = None
+        self.layer_classifiers = None
+        self.prov_detectors = None
+        self.final_whiten = None
+        self.final_detector = None
 
-    def forward(self, batch):
+    def forward(self, batch, trained_model):
         """
         Higher output means a higher probability of the input image being within the training
         distribution, i.e. non-adversarial.
+
+        trained_model: Model that is already trained to classify something. Should output logits for
+                       each class. NIC detects whether an input is an adversarial input for
+                       `trained_model`. Must have `activations` method that returns activations of
+                       last layer and optionally activations of some earlier layers.
         """
-        layers = [batch] + self.trained_model.activations(batch)
-        layers = [layer.flatten(1) for layer in self.layers_normalize(layers)]
+        
+        trained_model.eval()
+        layers = get_whitened_layers(self.whitening, trained_model, batch)
         value_densities = self.value_detectors(layers)
-        provenance_densities = self.provenance_detectors(cat_layer_pairs(layers))
-        densities = value_densities + provenance_densities
-        densities = torch.cat([d.unsqueeze(1) for d in densities], dim=1)
-        return self.final_svm(self.density_normalize(densities))
 
+        # Last layer already contains logits from trained model, so there's no need to use a
+        # classifier.
+        layer_logits = self.layer_classifiers(layers[:-2]) + [layers[-1]]
+        for logits in layer_logits:
+            assert logits.size(1) == layer_logits[0].size(1), (logits, layer_logits)
+        prov_densities = self.prov_detectors(cat_layer_pairs(layer_logits))
 
-def train_layer_svms(train_layers, val_layers, svm_name):
-    svms, train_densities, val_densities = [], [], []
-    for i_layer, train_inputs in enumerate(train_layers):
-        print(f"--- {svm_name} SVM #{i_layer} ---")
-        svm = model.SVM(train_inputs[0], 100).to(train_inputs.device)
-        train_one_class(svm, train_inputs, val_layers[i_layer])
-        svms.append(svm)
-        train_densities.append(svm(train_inputs))
-        val_densities.append(svm(val_layers[i_layer]))
+        densities = cat_features(value_densities + prov_densities)
+        return self.final_detector(self.final_whiten(densities))
 
-    return svms, train_densities, val_densities
+    def fit(self, data, trained_model):
+        """
+        data: ((training_inputs, training_targets), (validation_inputs, validation_targets))
+              Targets should be class indices.
 
+        trained_model: Model that is already trained to classify something. Should output logits for
+                       each class. NIC detects whether an input is an adversarial input for
+                       `trained_model`. Must have `activations` method that returns activations of
+                       last layer and optionally activations of some earlier layers.
+        """
+        (train_inputs, train_targets), (val_inputs, val_targets) = data
+        trained_model.eval()
 
-def train_nic(trained_model, data):
-    """
-    trained_model: Model that is already trained to classify images. NIC detects whether an image is
-                   an adversarial image for `trained_model`.
-    data: ((training_images, _), (validation_images, _)). Image tensors should have size
-          (n_images, height, width, n_channels).
-    """
-    with torch.no_grad():
-        (train_imgs, _), (val_imgs, _) = data
-        assert train_imgs.ndim == 4, train_imgs.size()
-
-        train_layers = [train_imgs] + trained_model.activations(train_imgs)
-        normalization = [model.Normalize(layer.mean(-1), layer.std(-1)) for layer in train_layers]
-        train_layers = [n(layer).flatten(1) for n, layer in zip(normalization, train_layers)]
-
-        val_layers = [val_imgs] + trained_model.activations(val_imgs)
-        val_layers = [n(layer).flatten(1) for n, layer in zip(normalization, val_layers)]
-
-    train_densities, val_densities = [], []
-
-    value_svms = []
-
-    # logits = []
-    # The last layer of `train_layers` already contains logits, and the last layer of
-    # `train_layers` is a linear transformation of the next to last layer.
-
-    provenance_svms = []
-    train_pairs = model.cat_layer_pairs(train_layers)
-    val_pairs = model.cat_layer_pairs(val_layers)
-    for i_layer, inputs in enumerate(train_pairs):
-        print(f"--- Provenance SVM #{i_layer} ---")
-        svm = model.SVM(inputs[0], 100).to(inputs.device)
-        train_one_class(svm, inputs, val_pairs[i_layer])
-        provenance_svms.append(svm)
-
-    final_svm = model.SVM()
-
-
-if __name__ == "__main__":
-    detector = Detector(imgs[0]).to(device)
-    model.load(detector, "detect-18dab86434e82bce7472c09da5f82864a6424e86.pt")
-    detector.eval()
-
-    with torch.no_grad():
-        prs_original_adv = prs_adv(detector, imgs)
-        prs_adv_adv = prs_adv(detector, untargeted_imgs)
-
-    print(
-        f"Predicted probability that original images are adversarial {torch.mean(prs_original_adv)}"
-    )
-    print(
-        f"Predicted probability that adversarial images are adversarial {torch.mean(prs_adv_adv)}"
-    )
-    plot_distr_overlap(prs_original_adv, prs_adv_adv)
-
-    for threshold in [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.05, 0.99, 0.995, 0.999]:
-        print(
-            f"Detector accuracy on original images with threshold {threshold}:",
-            torch.sum(prs_original_adv < threshold) / len(imgs),
+        detector_args = {
+            'num_components': min(300, 2 + len(train_inputs) // 50),
+            'covariance_type': "spherical",
+            'init_strategy': "kmeans",
+            'batch_size': 5000  # Largest size that fits in memory
+        }
+        
+        with torch.no_grad():
+            print("Whiten NIC layers")
+            train_layers = [train_inputs] + trained_model.activations(train_inputs)
+            self.whitening = Zip([
+                train.Whiten(layer[0]).fit(layer) for layer in train_layers
+            ])
+            train_layers = self.whitening([layer.flatten(1) for layer in train_layers])
+            val_layers = get_whitened_layers(self.whitening, trained_model, val_inputs)
+        
+        self.value_detectors, train_value_densities = train_layer_detectors(
+            train_layers, detector_args, "Value"
         )
-        print(
-            f"Detector accuracy on adversarial images with threshold {threshold}:",
-            torch.sum(prs_adv_adv > threshold) / len(imgs),
+        self.layer_classifiers, train_logits = train_layer_classifiers(
+            train_layers,
+            train_targets,
+            val_layers,
+            val_targets,
+            n_classes=train_layers[-1].size(1)
+        )
+        self.prov_detectors, train_prov_densities = train_layer_detectors(
+            cat_layer_pairs(train_logits), detector_args, "Provenance"
         )
 
-# Fully connected detector taking just the raw image as input can detect 90% of adversarial images
-# while classifying 90% of normal images correctly, or detect 50% of adversarial images while
-# classifying 99.5% of normal images correctly. Detecting 99% of adversarial images would mean
-# classifying only 3% of normal images correctly.
+        with torch.no_grad():
+            train_densities = cat_features(train_value_densities + train_prov_densities)
+            self.final_whiten = train.Whiten(train_densities[0]).fit(train_densities)
+            train_densities = self.final_whiten(train_densities)
+
+        self.final_detector = DetectorMixture(**detector_args).fit(train_densities)
+        return self
+
+
+def train_layer_classifiers(train_layers, train_targets, val_layers, val_targets, n_classes):
+    # The last layer of `train_layers` already contains logits, and the next-to-last layer is
+    # just a linear transformation of the last layer, so exclude the last two layers.
+    train_logits, classifiers = [], []
+    for i_layer, (train_layer, val_layer) in enumerate(zip(train_layers[:-2], val_layers[:-2])):
+        print(f"--- Classifier {i_layer}/{len(train_layers)} ---")
+        classifier = nn.Linear(train_layer.size(1), n_classes)
+        data = ((train_layer, train_targets), (val_layer, val_targets))
+        train.logistic_regression(classifier, data, init=True)
+
+        with torch.no_grad():
+            train_logits.append(classifier(train_layer))
+        classifiers.append(classifier)
+
+    train_logits.append(train_layers[-1])  # Last layer already contains logits
+    classifiers = Zip(classifiers)
+    return classifiers, train_logits
+
+
+def train_layer_detectors(train_layers, detector_args, detector_name):
+    train_densities, detectors = [], []
+    for i_layer, train_layer in enumerate(train_layers):
+        print(f"--- {detector_name} detector {i_layer}/{len(train_layers)} ---")
+        detector = DetectorMixture(**detector_args)
+
+        train_densities.append(detector.fit_predict(train_layer))
+        detectors.append(detector)
+    
+    detectors = Zip(detectors)
+    return detectors, train_densities

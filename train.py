@@ -220,3 +220,4 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
             net.train()
     net.load_state_dict(min_val_state)
+    net.eval()

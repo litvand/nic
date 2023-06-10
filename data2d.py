@@ -39,8 +39,8 @@ def line(n_train, n_val, device):
     return preprocess(n_train, points, targets)
 
 
-def hollow(n_train, n_val, device):
-    points = torch.randn((n_train + n_val, 2), device=device) * 4
+def hollow(n_train, n_val, device, n_dim=2):
+    points = torch.randn((n_train + n_val, n_dim), device=device) * 4
     dists = torch.norm(points, dim=1)
     targets = (dists > 3) & (dists < 5)
     return preprocess(n_train, points, targets)
