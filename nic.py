@@ -7,12 +7,19 @@ import eval
 import mnist
 import train
 from mixture import DetectorMixture
+from train import Normalize
 
 
-class Zip(nn.Module):
+class ZipN(nn.Module):
     def __init__(self, modules):
         super().__init__()
         self.modules = modules
+    
+    def __iter__(self):
+        return iter(self.modules)
+
+    def __len__(self):
+        return len(self.modules)
 
     def forward(self, inputs_iter):
         return [m(inputs) for m, inputs in zip(self.modules, inputs_iter)]
@@ -47,14 +54,23 @@ def cat_features(features):
 
 
 class NIC(nn.Module):
-    def __init__(self):
+    def __init__(self, example_img, trained_model):
         super().__init__()
-        self.whitening = None
-        self.value_detectors = None
-        self.layer_classifiers = None
-        self.prov_detectors = None
-        self.final_whiten = None
-        self.final_detector = None
+
+        trained_model.eval()
+        with torch.no_grad():
+            imgs = example_img.unsqueeze(0)
+            layers = [imgs] + trained_model.activations(imgs)
+            n_classes = layers[-1].size(1)  # Last layer's number of features
+
+        self.whitening = ZipN([Normalize(a[0]) for a in layers])
+        self.value_detectors = ZipN([DetectorMixture()])
+        self.layer_classifiers = ZipN([nn.Linear(a.size(1), n_classes) for a in layers[:-2]])
+        self.prov_detectors = ZipN([DetectorMixture() for _ in self.layer_classifiers])
+        self.final_whiten = Normalize(
+            torch.zeros(len(self.value_detectors) + len(self.prov_detectors))
+        )
+        self.final_detector = DetectorMixture()
 
     def forward(self, batch, trained_model):
         """
@@ -104,7 +120,7 @@ class NIC(nn.Module):
         with torch.no_grad():
             print("Whiten NIC layers")
             train_layers = [train_inputs] + trained_model.activations(train_inputs)
-            self.whitening = Zip([train.Normalize(layer[0]).fit(layer) for layer in train_layers])
+            self.whitening = ZipN([Normalize(layer[0]).fit(layer) for layer in train_layers])
             train_layers = self.whitening(layer.flatten(1) for layer in train_layers)
             cat_layer_pairs(train_layers)
             val_layers = get_whitened_layers(self.whitening, trained_model, val_inputs)
@@ -125,7 +141,7 @@ class NIC(nn.Module):
         print("Final whiten")
         with torch.no_grad():
             train_densities = cat_features(train_value_densities + train_prov_densities)
-            self.final_whiten = train.Normalize(train_densities[0]).fit(train_densities)
+            self.final_whiten = Normalize(train_densities[0]).fit(train_densities)
             train_densities = self.final_whiten(train_densities)
 
         self.final_detector = DetectorMixture(**detector_args).fit(train_densities)
@@ -147,7 +163,7 @@ def train_layer_classifiers(train_layers, train_targets, val_layers, val_targets
         classifiers.append(classifier)
 
     train_logits.append(train_layers[-1])  # Last layer already contains logits
-    classifiers = Zip(classifiers)
+    classifiers = ZipN(classifiers)
     return classifiers, train_logits
 
 
@@ -160,7 +176,7 @@ def train_layer_detectors(train_layers, detector_args, detector_name):
         train_densities.append(detector.fit_predict(train_layer))
         detectors.append(detector)
 
-    detectors = Zip(detectors)
+    detectors = ZipN(detectors)
     return detectors, train_densities
 
 
@@ -173,12 +189,13 @@ if __name__ == '__main__':
     trained_model = classifier.FullyConnected(data[0][0][0]).to(device)
     train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2.pt")
 
-    nic = NIC().to(device).fit(data, trained_model)
+    nic = NIC(data[0][0][0], trained_model).to(device).fit(data, trained_model)
     train.save(nic, "nic-onfc20k")
+    # train.load(nic, "nic-onfc20k-336b580d85a8b1d92a5b7fd36fbbc9ade9850a78.pt")
 
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
         data[1][0], data[1][1], trained_model, 0.2
     )
     with torch.no_grad():
         nic.eval()
-        eval.print_bin_acc(nic(detector_val_imgs), detector_val_targets == 1, "NIC")
+        eval.print_bin_acc(nic(detector_val_imgs, trained_model), detector_val_targets == 1, "NIC")
