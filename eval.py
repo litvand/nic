@@ -1,4 +1,3 @@
-from tkinter import N
 import matplotlib.pyplot as plt
 import torch
 

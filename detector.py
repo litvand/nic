@@ -114,7 +114,8 @@ if __name__ == "__main__":
     with torch.no_grad():
         detector.eval()
         val_prs = detector.prs(detector_val_imgs)
-        for threshold in [detector.threshold.item(), 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+        thresholds = [detector.threshold.item()] + [i/10 for i in range(1, 10)]
+        for threshold in thresholds:
             eval.print_bin_acc(
                 val_prs - threshold,
                 detector_val_targets == 1,
@@ -127,7 +128,7 @@ if __name__ == "__main__":
     #     "Detector net on validation adversarial",
     #     "original images"
     # )
-    # plt.show()
+    plt.show()
 
 # Fully connected detector taking just the raw image as input can detect 90% of adversarial images
 # while classifying 90% of normal images correctly, or detect 50% of adversarial images while

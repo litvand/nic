@@ -69,11 +69,10 @@ class PoolNet(nn.Module):
 
 
 if __name__ == "__main__":
-    # train.git_commit()
+    train.git_commit()
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data = mnist.load_data(n_train=20000, n_val=2000, device=device)
-    net = PoolNet(data[0][0][0]).to(device)
-    # train.load(net, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
+    net = FullyConnected(data[0][0][0]).to(device)
     train.logistic_regression(net, data, init=True)
     train.save(net, "pool20k")

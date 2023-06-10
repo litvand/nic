@@ -27,7 +27,7 @@ def cat_layer_pairs(layers):
     with torch.no_grad():
         n_layer_features = torch.Tensor([layer.size(1) for layer in layers])
         ends = n_layer_features.cumsum()
-    return [cat_all[:, ends[i] - n_layer_features[i] : ends[i + 1]] for i in range(len(layers) - 1)]
+    return [cat_all[:, ends[i] - n_layer_features[i]: ends[i + 1]] for i in range(len(layers) - 1)]
 
 
 def get_whitened_layers(whitening, trained_model, batch):
