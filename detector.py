@@ -118,6 +118,7 @@ if __name__ == "__main__":
 
     prs_on_adv = val_prs[detector_val_targets == 0]
     prs_on_original = val_prs[detector_val_targets == 1]
+    print("n on adv, n on original, n imgs", len(prs_on_adv), len(prs_on_original), len(detector_val_imgs))
     for threshold in [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.05, 0.99, 0.995, 0.999]:
         print(
             f"Detector accuracy on original and adversarial images with threshold {threshold}:",
