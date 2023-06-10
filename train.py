@@ -174,9 +174,15 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
     min_lr = 1e-8  # Early stop if LR becomes too low
     optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, eps=0, min_lr=min_lr / 2)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        eps=0,
+        min_lr=min_lr / 2,
+        verbose=True
+    )
     min_val_loss = float("inf")
     min_val_state = net.state_dict()
+    min_val_optim_state = optimizer.state_dict()
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_inputs))
@@ -189,8 +195,8 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
         loss = None
         for i_input in range(0, len(train_inputs), batch_size):
-            batch_inputs = train_inputs[i_input : i_input + batch_size]
-            batch_targets = train_targets[i_input : i_input + batch_size]
+            batch_inputs = train_inputs[i_input: i_input + batch_size]
+            batch_targets = train_targets[i_input: i_input + batch_size]
             batch_outputs = net(batch_inputs)
 
             loss = F.cross_entropy(batch_outputs, batch_targets)
@@ -203,20 +209,26 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             net.eval()
             print(f"Epoch {epoch} ({len(train_inputs)//1000}k samples per epoch)")
             print(f"Last batch loss {loss.item()}")
-            eval.print_multi_acc("Batch accuracy", batch_outputs, batch_targets)
+            eval.print_multi_acc(batch_outputs, batch_targets, "Batch")
 
             val_outputs = net(val_inputs)
             val_loss = F.cross_entropy(val_outputs, val_targets).item()
             print("Validation loss", val_loss)
-            eval.print_multi_acc("Validation accuracy", val_outputs, val_targets)
+            eval.print_multi_acc(val_outputs, val_targets, "Validation")
 
             if val_loss <= min_val_loss:
                 min_val_state = deepcopy(net.state_dict())
                 min_val_loss = val_loss
 
+            prev_lr = optimizer.param_groups[0]["lr"]
             scheduler.step(val_loss)
             if all(g["lr"] < min_lr for g in optimizer.param_groups):
                 break
+            elif optimizer.param_groups[0]["lr"] < prev_lr:
+                net.load_state_dict(min_val_state)
+                # Reset optimizer state, but not learning rate
+                min_val_optim_state["param_groups"] = optimizer.param_groups
+                optimizer.load_state_dict(min_val_optim_state)
 
             net.train()
     net.load_state_dict(min_val_state)

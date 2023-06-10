@@ -69,7 +69,7 @@ class PoolNet(nn.Module):
 
 
 if __name__ == "__main__":
-    train.git_commit()
+    # train.git_commit()
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data = mnist.load_data(n_train=20000, n_val=2000, device=device)
