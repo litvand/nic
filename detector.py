@@ -99,7 +99,7 @@ if __name__ == "__main__":
     example_img = data[0][0][0]
 
     trained_model = classifier.PoolNet(example_img).to(device)
-    train.load(trained_model, "pool20k-18dab86434e82bce7472c09da5f82864a6424e86.pt")
+    train.load(trained_model, "pool-restart20k-615826bb2a224107592901df35cf2c5bc9402331.pt")
 
     detector = DetectorNet(example_img).to(device).fit(data, trained_model, eps=0.2)
     train.save(detector, "detector-net20k")
