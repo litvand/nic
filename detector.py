@@ -110,22 +110,17 @@ if __name__ == "__main__":
     detector_val_imgs, detector_val_targets = fgsm_detector_data(
         data[1][0], data[1][1], trained_model, 0.2
     )
-    detector.eval()
 
     with torch.no_grad():
+        detector.eval()
         val_prs = detector.prs(detector_val_imgs)
-        val_outputs = val_prs - detector.threshold
-        eval.print_bin_acc(val_outputs, detector_val_targets == 1, "Detector net validation")
+        for threshold in [detector.threshold, 0.1, 0.4, 0.5, 0.6, 0.9]:
+            eval.print_bin_acc(
+                val_prs - threshold,
+                detector_val_targets == 1,
+                f"Threshold {threshold}"
+            )
 
-    prs_on_adv = val_prs[detector_val_targets == 0]
-    prs_on_original = val_prs[detector_val_targets == 1]
-    for threshold in [0.1, 0.4, 0.5, 0.6, 0.9]:
-        print(
-            f"Detector accuracy on original and adversarial images with threshold {threshold}:",
-            eval.div_zero((prs_on_original > threshold).count_nonzero(), len(prs_on_original)),
-            eval.div_zero((prs_on_adv < threshold).count_nonzero(), len(prs_on_adv)),
-        )
-    print("Detector threshold", detector.threshold)
     # eval.plot_distr_overlap(
     #     prs_on_adv,
     #     prs_on_original,
