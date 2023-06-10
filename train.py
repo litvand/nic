@@ -155,7 +155,7 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
     return optimizer
 
 
-def gradient_noise(model, i_input, initial_variance=0.001):
+def gradient_noise(model, i_input, initial_variance=0.01):
     with torch.no_grad():
         std = math.sqrt(initial_variance / (1 + i_input / 100) ** 0.55)
         for param in model.parameters():
@@ -176,7 +176,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     # decrease accuracy on adversarial validation images.
     restarts = True
     min_lr = 5e-6  # Early stop if LR becomes too low
-    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-8, lr=0.1)
+    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         eps=0,
