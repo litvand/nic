@@ -12,7 +12,7 @@ class DetectorMixture(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__()
         self.mixture = GaussianMixture(*args, **kwargs)
-        self.threshold = nn.Parameter(torch.zeros(1), requires_grad=False)
+        self.threshold = nn.Parameter(torch.nan, requires_grad=False)
 
     def forward(self, points):
         return self.densities(points) - self.threshold
@@ -28,8 +28,7 @@ class DetectorMixture(nn.Module):
     def fit_predict(self, train_points):
         self.mixture.fit(train_points)
         densities = self.densities(train_points)
-        self.threshold[0] = densities.min().item()
-        self.threshold.to(densities.device)
+        self.threshold = nn.Parameter(densities.min(), requires_grad=False)
         return densities - self.threshold
 
 

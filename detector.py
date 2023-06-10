@@ -20,7 +20,7 @@ def balanced_acc_threshold(train_outputs, is_positive_target):
 
     pos_target_min = train_outputs[is_positive_target].min()
     neg_target_max = train_outputs[~is_positive_target].max()
-    return ((pos_target_min + neg_target_max) / 2).item()
+    return (pos_target_min + neg_target_max) / 2
 
 
 class DetectorNet(nn.Module):
@@ -34,7 +34,7 @@ class DetectorNet(nn.Module):
             nn.BatchNorm1d(n_hidden),
             nn.Linear(n_hidden, 2),
         )
-        self.threshold = nn.Parameter(torch.zeros(1), requires_grad=False)
+        self.threshold = nn.Parameter(torch.tensor(torch.nan), requires_grad=False)
         self.last_detector_data = None
 
     def forward(self, img_batch):
@@ -58,9 +58,10 @@ class DetectorNet(nn.Module):
         )
         train.logistic_regression(self.seq, detector_data, init=True)
         with torch.no_grad():
-            train_prs = self.prs(detector_data[0][0])
-            self.threshold[0] = balanced_acc_threshold(train_prs, detector_data[0][1] == 1)
-            self.threshold.to(train_prs.device)
+            self.threshold = nn.Parameter(
+                balanced_acc_threshold(self.prs(detector_data[0][0]), detector_data[0][1] == 1),
+                requires_grad=False
+            )
 
         return self
 
@@ -118,7 +119,6 @@ if __name__ == "__main__":
 
     prs_on_adv = val_prs[detector_val_targets == 0]
     prs_on_original = val_prs[detector_val_targets == 1]
-    print("n on adv, n on original, n imgs", len(prs_on_adv), len(prs_on_original), len(detector_val_imgs))
     for threshold in [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.05, 0.99, 0.995, 0.999]:
         print(
             f"Detector accuracy on original and adversarial images with threshold {threshold}:",

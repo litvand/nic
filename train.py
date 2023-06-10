@@ -175,8 +175,8 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     # Restarts seem to increase accuracy on the original validation images, but
     # decrease accuracy on adversarial validation images.
     restarts = True
-    min_lr = 1e-8  # Early stop if LR becomes too low
-    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
+    min_lr = 5e-6  # Early stop if LR becomes too low
+    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-8, lr=0.1)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         eps=0,

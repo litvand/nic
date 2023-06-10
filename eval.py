@@ -40,33 +40,15 @@ def bin_acc(outputs, targets):
     """
 
     outputs = outputs > 0
+    assert targets.dtype == torch.bool, targets.dtype
     acc = div_zero(torch.count_nonzero(outputs == targets), len(targets))
 
     on_pos, on_neg = outputs[targets], outputs[~targets]
     acc_on_pos = div_zero(on_pos.count_nonzero(), len(on_pos))
     acc_on_neg = div_zero(len(on_neg) - on_neg.count_nonzero(), len(on_neg))
 
-    print(
-        "Binary counts",
-        torch.count_nonzero(outputs == targets),
-        on_pos.count_nonzero(),
-        len(on_neg) - on_neg.count_nonzero(),
-    )
-    print("len on_pos, on_neg", len(on_pos), len(on_neg))
-    # print("len outputs, targets", len(outputs), len(targets), targets)
-    # print("outputs[0]", outputs[0], outputs[0] == 0, outputs[0] == 1, outputs[:1].count_nonzero())
-
     balanced = (acc_on_pos + acc_on_neg) / 2
     return acc, balanced, acc_on_pos, acc_on_neg
-
-
-"""
-acc = (correct_on_pos + correct_on_neg) / (n_on_pos + n_on_neg)
-balanced_acc = (correct_on_pos/n_on_pos + correct_on_neg/n_on_neg)/2
-if n_on_pos == n_on_neg:
-    acc = (correct_on_pos + correct_on_neg) / (2 * n_on_pos)
-    balanced_acc = ((correct_on_pos + correct_on_neg) / n_on_pos)/2
-"""
 
 
 def print_bin_acc(outputs, targets, model_name):
