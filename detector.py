@@ -74,11 +74,11 @@ if __name__ == "__main__":
     example_img = data[0][0][0]
 
     trained_model = classifier.FullyConnected(example_img).to(device)
-    train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2.pt")
+    train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
 
     detector = DetectorNet(example_img).to(device)  # .fit(data, trained_model, eps=0.2)
     # train.save(detector, "detector-net20k")
-    train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5.pt")
+    train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5")
 
     # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(

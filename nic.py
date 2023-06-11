@@ -6,7 +6,7 @@ import classifier
 import eval
 import mnist
 import train
-from mixture import DetectorMixture
+from cavegmm import DetectorMixture
 from train import Normalize
 
 
@@ -187,11 +187,11 @@ if __name__ == '__main__':
     data = mnist.load_data(n_train=20000, n_val=2000, device=device)
 
     trained_model = classifier.FullyConnected(data[0][0][0]).to(device)
-    train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2.pt")
+    train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
 
     nic = NIC(data[0][0][0], trained_model).to(device).fit(data, trained_model)
     train.save(nic, "nic-onfc20k")
-    # train.load(nic, "nic-onfc20k-336b580d85a8b1d92a5b7fd36fbbc9ade9850a78.pt")
+    # train.load(nic, "nic-onfc20k-036721ae464e534d53585e0a62bf0ecc6c25405f")
 
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
         data[1][0], data[1][1], trained_model, 0.2

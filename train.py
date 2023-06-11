@@ -32,7 +32,7 @@ def save(model, model_name):
 
 
 def load(model, filename):
-    model.load_state_dict(torch.load(f"models/{filename}"))
+    model.load_state_dict(torch.load(f"models/{filename}.pt"))
 
 
 def activations_at(sequential, inputs, module_indices):
