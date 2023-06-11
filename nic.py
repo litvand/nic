@@ -189,9 +189,9 @@ if __name__ == '__main__':
     trained_model = classifier.FullyConnected(data[0][0][0]).to(device)
     train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
 
-    nic = NIC(data[0][0][0], trained_model).to(device).fit(data, trained_model)
-    train.save(nic, "nic-onfc20k")
-    # train.load(nic, "nic-onfc20k-036721ae464e534d53585e0a62bf0ecc6c25405f")
+    nic = NIC(data[0][0][0], trained_model).to(device)  # .fit(data, trained_model)
+    # train.save(nic, "nic-onfc20k")
+    train.load(nic, "nic-onfc20k-036721ae464e534d53585e0a62bf0ecc6c25405f")
 
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
         data[1][0], data[1][1], trained_model, 0.2
