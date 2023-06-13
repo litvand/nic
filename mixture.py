@@ -1,5 +1,7 @@
 from typing import Dict
+
 import matplotlib.pyplot as plt
+import pykeops
 import torch
 from pycave.bayes import GaussianMixture
 from torch import nn
@@ -7,6 +9,11 @@ from torch import nn
 import data2d
 import eval
 import train
+
+
+class DetectorKe(nn.Module):
+    def __init__(self):
+        super().__init__()
 
 
 class DetectorMixture(nn.Module):
@@ -22,25 +29,6 @@ class DetectorMixture(nn.Module):
         assert len(extra_state) == 2, extra_state
         self.mixture.set_params(extra_state[0])
         self.mixture.model_.load_state_dict(extra_state[1])
-
-    # @torch.jit.export
-    # def _save_to_state_dict(
-    #     self,
-    #     destination: Dict[str, torch.Tensor],
-    #     prefix: str,
-    #     keep_vars: bool
-    # ):
-        
-    #     return destination
-
-    # @torch.jit.export
-    # def _load_from_state_dict(self,
-    #                             state_dict: Dict[str, torch.Tensor],
-    #                             prefix: str, local_metadata: Any,
-    #                             strict: bool, missing_keys: List[str],
-    #                             unexpected_keys: List[str],
-    #                             error_msgs: List[str]):
-
 
     def forward(self, points):
         return self.densities(points) - self.threshold

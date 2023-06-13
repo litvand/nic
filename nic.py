@@ -6,7 +6,7 @@ import classifier
 import eval
 import mnist
 import train
-from cavegmm import DetectorMixture
+from mixture import DetectorMixture
 from train import Normalize
 
 
