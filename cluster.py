@@ -59,8 +59,10 @@ def kmeans_plusplus(train_points, n_centers):
     return centers
 
 
-def kmeans_lloyd(train_points, centers, accuracy=0.999):
+def kmeans_lloyd(train_points, centers, accuracy):
     """Implements Lloyd's algorithm for the Euclidean metric."""
+
+    assert 0 <= accuracy <= 1, accuracy
 
     point_i = LazyTensor(train_points[:, None, :])
     center_j = LazyTensor(centers[None, :, :])
@@ -68,24 +70,24 @@ def kmeans_lloyd(train_points, centers, accuracy=0.999):
     avg_dist = torch.inf
     for iter in range(1000):
         # E step: assign points to the closest cluster
-        dists = ((point_i - center_j) ** 2).sum(-1)  # symbolic squared distances
+        dist_ij = point_i.sqdist(center_j)  # symbolic squared distances
         if iter % 2 == 1:
-            min_dists, cluster_of_point = dists.min_argmin(dim=1)
+            dist_i, which_j = dist_ij.min_argmin(dim=1)
         else:
-            cluster_of_point = dists.argmin(dim=1)
+            which_j = dist_ij.argmin(dim=1)
         
         # M step: update the center to the cluster average
         centers.scatter_reduce_(
             0,
-            cluster_of_point.view(-1, 1).expand_as(train_points),
+            which_j.view(-1, 1).expand_as(train_points),
             train_points,
             reduce="mean",
             include_self=False
         )
 
         if iter % 2 == 1:
-            new_avg_dist = min_dists.mean()
-            # new_avg_dist should decrease by at least a factor of `accuracy`
+            new_avg_dist = dist_i.mean()
+            # Average square distance should decrease by at least a factor of `accuracy`
             if new_avg_dist >= accuracy * avg_dist:
                 # new_avg_dist isn't much better than avg_dist
                 break
@@ -95,7 +97,7 @@ def kmeans_lloyd(train_points, centers, accuracy=0.999):
     return centers
 
 
-def kmeans(train_points, n_centers):
+def kmeans(train_points, n_centers, accuracy=0.999):
     """
     train_points: Training points (size = n_points, n_features)
     n_centers: Number of centers
@@ -104,12 +106,12 @@ def kmeans(train_points, n_centers):
     """
 
     centers = train_points[torch.randperm(len(train_points))[:n_centers]]
-    return kmeans_lloyd(train_points, centers)
+    return kmeans_lloyd(train_points, centers, accuracy)
 
 
 def bench():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    train_points = data2d.hollow(50000, 1, device, 100)[0]
+    train_points = data2d.hollow(5000, 1, device, 100)[0]
     print("train_points", len(train_points))
 
     def b():

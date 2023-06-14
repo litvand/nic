@@ -1,8 +1,9 @@
-from typing import Dict
+from typing import Any, Dict
 
 import matplotlib.pyplot as plt
-import pykeops
+import pykeops.torch as ke
 import torch
+import torch.nn.functional as F
 from pycave.bayes import GaussianMixture
 from torch import nn
 
@@ -12,8 +13,87 @@ import train
 
 
 class DetectorKe(nn.Module):
-    def __init__(self):
+    def __init__(self, example_input, n_centers):
         super().__init__()
+
+        n_features, dtype = len(example_input), example_input.dtype
+        self.centers = nn.Parameter(torch.empty(n_centers, n_features, dtype=dtype))
+        self.covs_inv_sqrt = nn.Parameter(
+            torch.empty(n_centers, n_features, n_features, dtype=dtype)
+        )
+        self.covs_inv = None  # Calculated based on covs_inv_sqrt
+        self.weights = nn.Parameter(torch.empty(n_centers, dtype=dtype))
+        self.threshold = nn.Parameter(torch.tensor(torch.nan, dtype=dtype), requires_grad=False)
+
+    def refresh(self):
+        """Updates intermediate variables for calculating likelihoods based on parameters."""
+        self.covs_inv = torch.matmul(self.covs_inv_sqrt, self.covs_inv_sqrt.transpose(1, 2))
+        self.coefs = F.softmax(self.weights) * self.covs_inv.det().sqrt()
+    
+    def get_extra_state(self):
+        return 1  # Make sure `set_extra_state` is called
+    
+    def set_extra_state(self, _):
+        assert not self.threshold.isnan().item(), self.threshold  # Other state was already loaded
+        self.refresh()
+
+    def likelihoods(self, points):
+        dists = ke.Vi(points).weightedsqdist(ke.Vj(self.centers), ke.Vj(self.covs_inv))
+        return self.coefs * (-dists).exp()
+
+    def log_likelihoods(self, points):
+        """Log-density, sampled on a given point cloud."""
+        self.update_covariances()
+        K_ij = -Vi(points).weightedsqdist(Vj(self.centers), Vj(self.params["gamma"]))
+        return K_ij.logsumexp(dim=1, weight=Vj(self.weights()))
+
+    def neglog_likelihood(self, points):
+        """Returns -log(likelihood(points)) up to an additive factor."""
+        ll = self.log_likelihoods(points)
+        log_likelihood = torch.mean(ll)
+        # N.B.: We add a custom sparsity prior, which promotes empty clusters
+        #       through a soft, concave penalization on the class weights.
+        return -log_likelihood + self.sparsity * F.softmax(self.w, 0).sqrt().mean()
+
+    def plot(self, points):
+        """Displays the model."""
+        plt.clf()
+        # Heatmap:
+        heatmap = self.likelihoods(grid)
+        heatmap = (
+            heatmap.view(res, res).data.cpu().numpy()
+        )  # reshape as a "background" image
+
+        scale = np.amax(np.abs(heatmap[:]))
+        plt.imshow(
+            -heatmap,
+            interpolation="bilinear",
+            origin="lower",
+            vmin=-scale,
+            vmax=scale,
+            cmap=cm.RdBu,
+            extent=(0, 1, 0, 1),
+        )
+
+        # Log-contours:
+        log_heatmap = self.log_likelihoods(grid)
+        log_heatmap = log_heatmap.view(res, res).data.cpu().numpy()
+
+        scale = np.amax(np.abs(log_heatmap[:]))
+        levels = np.linspace(-scale, scale, 41)
+
+        plt.contour(
+            log_heatmap,
+            origin="lower",
+            linewidths=1.0,
+            colors="#C8A1A1",
+            levels=levels,
+            extent=(0, 1, 0, 1),
+        )
+
+        # Scatter plot of the dataset:
+        xy = points.data.cpu().numpy()
+        plt.scatter(xy[:, 0], xy[:, 1], 100 / len(xy), color="k")
 
 
 class DetectorMixture(nn.Module):
