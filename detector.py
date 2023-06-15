@@ -60,7 +60,7 @@ class DetectorNet(nn.Module):
         with torch.no_grad():
             self.threshold = nn.Parameter(
                 balanced_acc_threshold(self.prs(detector_data[0][0]), detector_data[0][1] == 1),
-                requires_grad=False
+                requires_grad=False,
             )
 
         return self
@@ -87,12 +87,10 @@ if __name__ == "__main__":
     with torch.no_grad():
         detector.eval()
         val_prs = detector.prs(detector_val_imgs)
-        thresholds = [detector.threshold.item()] + [i/10 for i in range(1, 10)] + [0.99, 0.999]
+        thresholds = [detector.threshold.item()] + [i / 10 for i in range(1, 10)] + [0.99, 0.999]
         for threshold in thresholds:
             eval.print_bin_acc(
-                val_prs - threshold,
-                detector_val_targets == 1,
-                f"Threshold {threshold}"
+                val_prs - threshold, detector_val_targets == 1, f"Threshold {threshold}"
             )
 
     # eval.plot_distr_overlap(

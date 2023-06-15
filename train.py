@@ -64,14 +64,14 @@ class Normalize(nn.Module):
 
     def fit(self, X_train, unit_range=False):
         X_train = X_train.transpose(0, 1).flatten(1)  # Channel dimension first
-        
+
         if unit_range:  # Each channel in the range [0, 1] (in training data)
             self.shift.copy_(X_train.min(1)[0])  # Min of each channel (in training data)
-            self.inv_scale.copy_(1. / (X_train.max(1)[0] - self.shift))
+            self.inv_scale.copy_(1.0 / (X_train.max(1)[0] - self.shift))
         else:
             self.shift.copy_(X_train.mean(1))  # Mean of each channel
-            self.inv_scale.copy_(1. / X_train.std(1))
-        
+            self.inv_scale.copy_(1.0 / X_train.std(1))
+
         return self
 
     def forward(self, X):
@@ -183,10 +183,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     min_lr = 5e-6  # Early stop if LR becomes too low
     optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        eps=0,
-        min_lr=min_lr / 2,
-        verbose=True
+        optimizer, eps=0, min_lr=min_lr / 2, verbose=True
     )
     min_val_loss = float("inf")
     min_val_state = net.state_dict()  # Not worth deepcopying
@@ -203,9 +200,9 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
         loss = None
         for i_x in range(0, len(X_train), batch_size):
-            batch_X = X_train[i_x: i_x + batch_size]
+            batch_X = X_train[i_x : i_x + batch_size]
             batch_outputs = net(batch_X)
-            batch_y = y_train[i_x: i_x + batch_size]
+            batch_y = y_train[i_x : i_x + batch_size]
 
             loss = F.cross_entropy(batch_outputs, batch_y)
             optimizer.zero_grad(set_to_none=True)

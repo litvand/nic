@@ -14,7 +14,7 @@ class ZipN(nn.Module):
     def __init__(self, modules):
         super().__init__()
         self.modules = modules
-    
+
     def __iter__(self):
         return iter(self.modules)
 
@@ -38,7 +38,7 @@ def cat_layer_pairs(layers):
     with torch.no_grad():
         n_layer_features = torch.tensor([layer.size(1) for layer in layers], dtype=torch.int32)
         ends = n_layer_features.cumsum(dim=0, dtype=torch.int32)
-    return [cat_all[:, ends[i] - n_layer_features[i]: ends[i + 1]] for i in range(len(layers) - 1)]
+    return [cat_all[:, ends[i] - n_layer_features[i] : ends[i + 1]] for i in range(len(layers) - 1)]
 
 
 def get_whitened_layers(whitening, trained_model, batch):
@@ -124,7 +124,7 @@ class NIC(nn.Module):
             train_layers = self.whitening(layer.flatten(1) for layer in train_layers)
             cat_layer_pairs(train_layers)
             val_layers = get_whitened_layers(self.whitening, trained_model, val_inputs)
-        
+
         print("train_layers", train_layers)
 
         self.value_detectors, train_value_densities = train_layer_detectors(
@@ -180,7 +180,7 @@ def train_layer_detectors(train_layers, detector_args, detector_name):
     return detectors, train_densities
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 

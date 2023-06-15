@@ -13,22 +13,13 @@ import data2d
 from cluster import cluster_covs_weights_, kmeans
 
 
-def get_cov_inv_sqrt_(cov):
-    if cov.size(1) == 1:
-        return cov.rsqrt_()
-
-    eigvals, eigvecs = linalg.eigh(cov)
-    return eigvecs.mm(eigvals.clamp(min=1e-12).rsqrt_().diag().mm(eigvecs.T))
-
-
-
 class GaussianMixture(nn.Module):
     def __init__(self, x_example, n_centers, equal_clusters=True, full_cov=True):
         super().__init__()
 
         n_features, dtype, device = len(x_example), x_example.dtype, x_example.device
         self.center = nn.Parameter(torch.rand(n_centers, n_features, dtype=dtype, device=device))
-        
+
         # OPTIM: Custom code for spherical clusters without full covariance
         c = n_features if full_cov else 1
         self.cov_inv_sqrt = nn.Parameter(torch.empty(n_centers, c, c, dtype=dtype, device=device))
@@ -43,10 +34,10 @@ class GaussianMixture(nn.Module):
         self.refresh()
 
         self.grid = None
-    
+
     def get_extra_state(self):
         return 1  # Make sure `set_extra_state` is called
-    
+
     def set_extra_state(self, _):
         # assert not self.threshold.isnan().item(), self.threshold  # Other state was already loaded
         self.refresh()
@@ -82,7 +73,7 @@ class GaussianMixture(nn.Module):
             ke.Vj(self.center.data), ke.Vj(self.cov_inv.flatten(1))
         )
         return d_ij.logsumexp(dim=1, weight=ke.Vj(self.coef[:, None]))
-    
+
     def net_ll(self, X_pos, X_neg):
         """Net log-likelihood, for maximizing balanced detection accuracy"""
 
@@ -92,7 +83,7 @@ class GaussianMixture(nn.Module):
         # ll_pos = ll_pos.clamp(max=max).mean()
         if X_neg is None:
             return ll_pos
-        
+
         ll_neg = self.log_likelihoods(X_neg).mean()
         # with torch.no_grad():
         #     min = ll_neg.mean()
@@ -110,7 +101,7 @@ class GaussianMixture(nn.Module):
         X_val_neg=None,
         n_epochs=500,
         sparsity=0,
-        plot=False
+        plot=False,
     ):
         early_stop = 10000  # Early stop if loss hasn't decreased for this many epochs
         val_interval = 5  # Validate/update min loss every this many epochs
@@ -151,15 +142,15 @@ class GaussianMixture(nn.Module):
                     if X_val_pos is not None:
                         loss = -self.net_ll(X_val_pos, X_val_neg).item()
                         losses_val.append(loss)
-                
+
                     if loss <= min_loss:
                         min_loss = loss
                         min_state = deepcopy(self.state_dict())
                         min_epoch = epoch
-            
+
             if epoch - min_epoch >= early_stop:
                 break
-        
+
         self.load_state_dict(min_state)
         threshold = self.log_likelihoods(X_train_pos).min()
         if X_train_neg is not None:
@@ -171,7 +162,7 @@ class GaussianMixture(nn.Module):
                 self.plot(X_val_pos, X_val_neg)
             else:
                 self.plot(X_train_pos, X_train_neg)
-            
+
             if len(losses_train) == 0:
                 return self
 
@@ -191,7 +182,7 @@ class GaussianMixture(nn.Module):
                 plt.plot(np.arange(len(losses_val)) * val_interval, losses_val)
                 i_min = losses_val.argmin()
                 print("Min validation loss, epoch:", losses_val[i_min], i_min * val_interval)
-        
+
         return self
 
     def plot(self, X, X_neg=None):
@@ -253,7 +244,7 @@ class GaussianMixture(nn.Module):
         if X_neg is not None:
             X_neg = X_neg.cpu().numpy()
             plt.scatter(X_neg[:, 0], X_neg[:, 1], 1000 / len(X_neg), c="b")
-        
+
         plt.tight_layout()
 
 

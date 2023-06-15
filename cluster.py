@@ -11,7 +11,7 @@ import data2d
 
 def pairwise_sqr_dists(X, centers):
     """Square L2 distance between each point and each center (dists[i_x, i_center])"""
-    return ((X[:, None, :] - centers[None, :, :])**2).sum(-1)
+    return ((X[:, None, :] - centers[None, :, :]) ** 2).sum(-1)
 
 
 def kmeans_farthest(X_train, n_centers):
@@ -21,14 +21,14 @@ def kmeans_farthest(X_train, n_centers):
     centers[0] = X_train[0]
 
     # Square distance of each point from its closest center
-    dists = ((X_train - centers[0])**2).sum(-1)
+    dists = ((X_train - centers[0]) ** 2).sum(-1)
     for i_center in range(1, n_centers):
         # Point that is farthest from previous centers
         centers[i_center] = X_train[dists.argmax().item()]
         if i_center == n_centers - 1:
             break  # Don't need distances
 
-        new_dists = ((X_train - centers[i_center])**2).sum(-1)
+        new_dists = ((X_train - centers[i_center]) ** 2).sum(-1)
         torch.minimum(dists, new_dists, out=dists)
 
     return centers
@@ -42,7 +42,7 @@ def kmeans_plusplus(X_train, n_centers):
     centers[0] = X_train[0]
 
     # Square distance of each point from its closest center
-    dists = ((X_train - centers[0])**2).sum(-1)
+    dists = ((X_train - centers[0]) ** 2).sum(-1)
     for i_center in range(1, n_centers):
         # Sample with probability proportional to square distance from previous centers.
         # Previous centers themselves have distance 0 and thus probability 0.
@@ -53,7 +53,7 @@ def kmeans_plusplus(X_train, n_centers):
         if i_center == n_centers - 1:
             break  # Don't need distances
 
-        new_dists = ((X_train - centers[i_center])**2).sum(-1)
+        new_dists = ((X_train - centers[i_center]) ** 2).sum(-1)
         torch.minimum(dists, new_dists, out=dists)
 
     return centers
@@ -66,7 +66,7 @@ def kmeans_lloyd(X_train, centers, accuracy):
 
     x_i = LazyTensor(X_train[:, None, :])
     center_j = LazyTensor(centers[None, :, :])
-    
+
     avg_dist = torch.inf
     for iter in range(1000):
         # E step: assign points to the closest cluster
@@ -75,14 +75,14 @@ def kmeans_lloyd(X_train, centers, accuracy):
             dist_i, j_center_from_i = dist_ij.min_argmin(dim=1)
         else:
             j_center_from_i = dist_ij.argmin(dim=1)
-        
+
         # M step: update the center to the cluster average
         centers.scatter_reduce_(
             0,
             j_center_from_i.view(-1, 1).expand_as(X_train),
             X_train,
             reduce="mean",
-            include_self=False
+            include_self=False,
         )
 
         if iter % 2 == 1:
@@ -108,6 +108,7 @@ def kmeans(X_train, n_centers, accuracy=0.9999):
     centers = X_train[torch.randperm(len(X_train))[:n_centers]]
     return kmeans_lloyd(X_train, centers, accuracy)
 
+
 def cluster_covs_weights_(cov, weight, X_train, centers):
     """
     Overwrites `cov` and `weight`
@@ -122,7 +123,7 @@ def cluster_covs_weights_(cov, weight, X_train, centers):
     center_j = LazyTensor(centers[None, :, :])
     dist_ij = x_i.sqdist(center_j)
     j_center_from_i = dist_ij.argmin(dim=1).view(-1)
-    
+
     c = cov.size(1)
     for j_center in range(len(centers)):
         X_center = X_train[j_center_from_i == j_center]
@@ -131,13 +132,13 @@ def cluster_covs_weights_(cov, weight, X_train, centers):
 
 
 def bench():
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     X_train = data2d.hollow(5000, 1, device, 100)[0]
     print("X_train", len(X_train))
 
     def b():
         # t = time.time()
-        centers = kmeans(X_train, 1+len(X_train)//100)
+        centers = kmeans(X_train, 1 + len(X_train) // 100)
         torch.cuda.synchronize()
         # print(time.time() - t)
         return centers

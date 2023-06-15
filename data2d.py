@@ -11,15 +11,15 @@ from train import Normalize
 
 def preprocess(n_train, X, y):
     X_train, X_val, y_train, y_val = X[:n_train], X[n_train:], y[:n_train], y[n_train:]
-    
+
     X_train_pos, X_train_neg = X_train[y_train], X_train[~y_train]
     X_val_pos, X_val_neg = X_val[y_val], X_val[~y_val]
-    
+
     max_len = len(X_train_pos)
     norm = Normalize(X_train_pos[0]).fit(X_train_pos, unit_range=True)
     return tuple(
-        None if len(X) == 0 else norm(X[torch.randperm(len(X))[:max_len]]) for
-        X in (X_train_pos, X_train_neg, X_val_pos, X_val_neg)
+        None if len(X) == 0 else norm(X[torch.randperm(len(X))[:max_len]])
+        for X in (X_train_pos, X_train_neg, X_val_pos, X_val_neg)
     )
 
 

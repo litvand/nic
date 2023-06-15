@@ -27,10 +27,10 @@ class DetectorKe(nn.Module):
         """Updates intermediate variables for calculating likelihoods based on parameters."""
         self.covs_inv = torch.matmul(self.covs_inv_sqrt, self.covs_inv_sqrt.transpose(1, 2))
         self.coefs = F.softmax(self.weights) * self.covs_inv.det().sqrt()
-    
+
     def get_extra_state(self):
         return 1  # Make sure `set_extra_state` is called
-    
+
     def set_extra_state(self, _):
         assert not self.threshold.isnan().item(), self.threshold  # Other state was already loaded
         self.refresh()
@@ -58,9 +58,7 @@ class DetectorKe(nn.Module):
         plt.clf()
         # Heatmap:
         heatmap = self.likelihoods(grid)
-        heatmap = (
-            heatmap.view(res, res).data.cpu().numpy()
-        )  # reshape as a "background" image
+        heatmap = heatmap.view(res, res).data.cpu().numpy()  # reshape as a "background" image
 
         scale = np.amax(np.abs(heatmap[:]))
         plt.imshow(
@@ -99,7 +97,7 @@ class DetectorMixture(nn.Module):
         super().__init__()
         self.mixture = GaussianMixture(**kwargs)
         self.threshold = nn.Parameter(torch.tensor(torch.nan), requires_grad=False)
-    
+
     def get_extra_state(self):
         return (self.mixture.get_params(), self.mixture.model_.state_dict())
 
