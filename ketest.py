@@ -10,16 +10,18 @@ from torch.nn.functional import softmax
 
 
 class GaussianMixture(nn.Module):
-    def __init__(self, example_input, n_centers, equal_clusters=True):
+    def __init__(self, example_input, n_centers, equal_clusters=True, spherical=True):
         super().__init__()
 
         n_features, dtype, device = len(example_input), example_input.dtype, example_input.device
         self.centers = torch.rand(n_centers, n_features, dtype=dtype, device=device)
-        self.covs_inv_sqrt = (
-            (15 * torch.eye(n_features, n_features, dtype=dtype, device=device))
-            .expand(n_centers, n_features, n_features)
-            .contiguous()
-        )
+        
+        # OPTIM: Custom code for spherical clusters
+        c = 1 if spherical else n_features
+        self.covs_inv_sqrt = ((15 * torch.eye(c, c, dtype=dtype, device=device))
+                              .expand(n_centers, c, c)
+                              .contiguous())
+
         self.weights = torch.ones(n_centers, dtype=dtype, device=device)
         self.centers.requires_grad, self.covs_inv_sqrt.requires_grad, self.weights.requires_grad = (
             True,
@@ -47,14 +49,13 @@ class GaussianMixture(nn.Module):
     def refresh(self):
         """Update intermediate variables when the model's parameters change."""
 
-        self.covs_inv = torch.matmul(self.covs_inv_sqrt, self.covs_inv_sqrt.transpose(1, 2))
-
         if self.equal_clusters.item():
             weights = self.weights.abs()
             self.center_prs = weights / (weights.sum() + 1e-30)
         else:
             self.center_prs = softmax(self.weights, 0)
 
+        self.covs_inv = torch.matmul(self.covs_inv_sqrt, self.covs_inv_sqrt.transpose(1, 2))
         self.coefs = self.center_prs * self.covs_inv.det().sqrt()
 
     def likelihoods(self, points):
@@ -146,7 +147,7 @@ train_points = torch.stack((0.5 + 0.4 * (angle / 7) * angle.cos(), 0.5 + 0.3 * a
 train_points = train_points + 0.02 * torch.randn(train_points.shape, device=device)
 
 # Model
-model = GaussianMixture(train_points[0], 30, equal_clusters=True)
+model = GaussianMixture(train_points[0], 30, equal_clusters=True, spherical=False)
 print("Expecting equal clusters:", model.equal_clusters.item())
 
 # Train
@@ -162,8 +163,9 @@ for it in range(501):
     losses[it] = loss.item()
 
     # if it in [0, 10, 100, 150, 250, 500]:
-    if it in [500]:
+    if it in [100]:
         model.plot(train_points)
+        break
 
 with torch.no_grad():
     print("Final log likelihood:", model.log_likelihoods(train_points).mean())
