@@ -36,11 +36,18 @@ class GaussianMixture(nn.Module):
         self.refresh()
 
         self.grid = None
+    
+    def get_extra_state(self):
+        return 1  # Make sure `set_extra_state` is called
+    
+    def set_extra_state(self, _):
+        assert not self.threshold.isnan().item(), self.threshold  # Other state was already loaded
+        self.refresh()
 
     def refresh(self):
         """Update intermediate variables when the model's parameters change."""
 
-        self.covs_inv = 0.5 * torch.matmul(self.covs_inv_sqrt, self.covs_inv_sqrt.transpose(1, 2))
+        self.covs_inv = torch.matmul(self.covs_inv_sqrt, self.covs_inv_sqrt.transpose(1, 2))
 
         if self.equal_clusters.item():
             weights = self.weights.abs()
@@ -51,12 +58,27 @@ class GaussianMixture(nn.Module):
         self.coefs = self.center_prs * self.covs_inv.det().sqrt()
 
     def likelihoods(self, points):
-        d_ij = -ke.Vi(points).weightedsqdist(ke.Vj(self.centers), ke.Vj(self.covs_inv.flatten(1)))
+        """
+        Returns density at each point (up to a constant factor depending on the number of features)
+        """
+
+        d_ij = -0.5 * ke.Vi(points).weightedsqdist(
+            ke.Vj(self.centers), ke.Vj(self.covs_inv.flatten(1))
+        )
         return d_ij.exp().matvec(self.coefs)
 
     def log_likelihoods(self, points):
-        d_ij = -ke.Vi(points).weightedsqdist(ke.Vj(self.centers), ke.Vj(self.covs_inv.flatten(1)))
+        """
+        Returns density at each point (up to a constant term depending on the number of features)
+        """
+
+        d_ij = -0.5 * ke.Vi(points).weightedsqdist(
+            ke.Vj(self.centers), ke.Vj(self.covs_inv.flatten(1))
+        )
         return d_ij.logsumexp(dim=1, weight=ke.Vj(self.coefs[:, None]))
+
+    def forward(self, points):
+        return self.log_likelihoods(points) - self.threshold
 
     def loss(self, points, sparsity):
         return -self.log_likelihoods(points).mean() + sparsity * self.center_prs.sqrt().mean()
