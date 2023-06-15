@@ -59,19 +59,25 @@ class Normalize(nn.Module):
         super().__init__()
         n_channels = len(example_input)
         d = example_input.device
-        self.mean = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
-        self.inv_std = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
+        self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
+        self.inv_scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
 
-    def fit(self, train_inputs):
+    def fit(self, train_inputs, unit_range=False):
         train_inputs = train_inputs.transpose(0, 1).flatten(1)  # Channel dimension first
-        self.mean.copy_(train_inputs.mean(1))
-        self.inv_std.copy_(1 / train_inputs.std(1))
+        
+        if unit_range:  # Each channel in the range [0, 1] (in training data)
+            self.shift.copy_(train_inputs.min(1)[0])  # Min of each channel (in training data)
+            self.inv_scale.copy_(1. / (train_inputs.max(1)[0] - self.shift))
+        else:
+            self.shift.copy_(train_inputs.mean(1))  # Mean of each channel
+            self.inv_scale.copy_(1. / train_inputs.std(1))
+        
         return self
 
     def forward(self, inputs):
         size = [1] * inputs.ndim
-        size[1] = len(self.mean)
-        return (inputs - self.mean.expand(size)) * self.inv_std.expand(size)
+        size[1] = len(self.shift)
+        return (inputs - self.shift.expand(size)) * self.inv_scale.expand(size)
 
 
 class Whiten(nn.Module):

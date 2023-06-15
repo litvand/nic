@@ -15,7 +15,7 @@ def preprocess(n_train, points, targets):
 
     train_points = points[:n_train][targets[:n_train]]
     val_points, val_targets = points[n_train:], targets[n_train:]
-    normalize = train.Normalize(train_points[0]).fit(train_points)
+    normalize = train.Normalize(train_points[0]).fit(train_points, unit_range=True)
     return normalize(train_points), normalize(val_points), val_targets
 
 

@@ -8,16 +8,19 @@ from matplotlib import pyplot as plt
 from torch import nn
 from torch.nn.functional import softmax
 
+import data2d
+from cluster import kmeans
+
 
 class GaussianMixture(nn.Module):
-    def __init__(self, example_input, n_centers, equal_clusters=True, spherical=True):
+    def __init__(self, example_input, n_centers, equal_clusters=True, full_cov=True):
         super().__init__()
 
         n_features, dtype, device = len(example_input), example_input.dtype, example_input.device
         self.centers = torch.rand(n_centers, n_features, dtype=dtype, device=device)
         
-        # OPTIM: Custom code for spherical clusters
-        c = 1 if spherical else n_features
+        # OPTIM: Custom code for spherical clusters without full covariance
+        c = n_features if full_cov else 1
         self.covs_inv_sqrt = ((15 * torch.eye(c, c, dtype=dtype, device=device))
                               .expand(n_centers, c, c)
                               .contiguous())
@@ -85,19 +88,22 @@ class GaussianMixture(nn.Module):
         return -self.log_likelihoods(points).mean() + sparsity * self.center_prs.sqrt().mean()
 
     def plot(self, points):
+        low, high = points.min().item(), points.max().item()
+        diff = high - low
+        low, high = low - diff, high + diff
+
         if self.grid is None:
             # Create a uniform grid on the unit square
             res = 200
-            ticks = torch.linspace(0.5/res, 1. - 0.5/res, res, dtype=points.dtype, device=device)
+            ticks = torch.linspace(low, high, res, dtype=points.dtype, device=device)
             grid0 = ticks.view(res, 1, 1).expand(res, res, 1)
             grid1 = ticks.view(1, res, 1).expand(res, res, 1)
             self.grid = torch.cat((grid1, grid0), dim=-1).view(-1, 2).to(device, points.dtype)
 
         plt.figure(figsize=(8, 8))
-        plt.title("Density, iteration " + str(it), fontsize=20)
+        plt.title("Likelihood", fontsize=20)
         plt.axis("equal")
-        plt.axis([0, 1, 0, 1])
-        plt.tight_layout()
+        plt.axis([low, high, low, high])
 
         # Heatmap
         res = int(math.sqrt(len(self.grid)))
@@ -113,7 +119,7 @@ class GaussianMixture(nn.Module):
             vmin=-scale,
             vmax=scale,
             cmap=cm.RdBu,
-            extent=(0, 1, 0, 1),
+            extent=(low, high, low, high),
         )
 
         # Log-contours
@@ -122,7 +128,7 @@ class GaussianMixture(nn.Module):
         log_heatmap = log_heatmap.view(res, res).data.cpu().numpy()
 
         scale = np.amax(np.abs(log_heatmap[:]))
-        levels = np.linspace(-scale, scale, 41)
+        levels = np.linspace(-scale, scale, 81)
 
         plt.contour(
             log_heatmap,
@@ -130,40 +136,48 @@ class GaussianMixture(nn.Module):
             linewidths=1.0,
             colors="#C8A1A1",
             levels=levels,
-            extent=(0, 1, 0, 1),
+            extent=(low, high, low, high),
         )
 
         # Scatter plot of the dataset
-        xy = points.cpu().numpy()
-        plt.scatter(xy[:, 0], xy[:, 1], 100 / len(xy), color="k")
+        points = points.cpu().numpy()
+        plt.scatter(points[:, 0], points[:, 1], 1000 / len(points), color="k")
+        plt.tight_layout()
 
 
-# Choose the storage place for our data : CPU (host) or GPU (device) memory.
+def spiral(n_train, n_valid, device):
+    angle = torch.linspace(0, 2 * np.pi, n_train + n_valid + 1, device=device)[:-1]
+    points = torch.stack((0.5 + 0.4 * (angle / 7) * angle.cos(), 0.5 + 0.3 * angle.sin()), 1)
+    points.add_(torch.randn(points.shape, device=device), alpha=0.02)
+    points = 3 * points[torch.randperm(len(points))]
+    return points[:n_train], points[n_train:]
+
+
+# Data
 device = "cuda" if torch.cuda.is_available() else "cpu"
 torch.manual_seed(0)
-n_train = 10000  # Number of samples
-angle = torch.linspace(0, 2 * np.pi, n_train + 1, device=device)[:-1]
-train_points = torch.stack((0.5 + 0.4 * (angle / 7) * angle.cos(), 0.5 + 0.3 * angle.sin()), 1)
-train_points = train_points + 0.02 * torch.randn(train_points.shape, device=device)
+train_points = spiral(5000, 1, device)[0]
 
 # Model
-model = GaussianMixture(train_points[0], 30, equal_clusters=True, spherical=False)
+model = GaussianMixture(train_points[0], 30, equal_clusters=True)
 print("Expecting equal clusters:", model.equal_clusters.item())
+with torch.no_grad():
+    model.centers.copy_(kmeans(train_points, len(model.centers)))
 
 # Train
 optimizer = torch.optim.Adam([model.covs_inv_sqrt, model.weights, model.centers], lr=0.1)
 losses = np.zeros(501)
 
 for it in range(501):
-    optimizer.zero_grad()  # Reset the gradients (PyTorch syntax...).
-    loss = model.loss(train_points, sparsity=20)  # Cost to minimize.
-    loss.backward()  # Backpropagate to compute the gradient.
+    optimizer.zero_grad(set_to_none=True)
+    loss = model.loss(train_points, sparsity=20)
+    loss.backward()
     optimizer.step()
     model.refresh()
     losses[it] = loss.item()
 
     # if it in [0, 10, 100, 150, 250, 500]:
-    if it in [100]:
+    if it == 100:
         model.plot(train_points)
         break
 
