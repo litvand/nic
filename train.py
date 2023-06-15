@@ -35,16 +35,16 @@ def load(model, filename):
     model.load_state_dict(torch.load(f"models/{filename}.pt"))
 
 
-def activations_at(sequential, inputs, module_indices):
+def activations_at(sequential, X, module_indices):
     """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
 
     sequential = list(sequential.children())
     activations = []
     for i_module, module in enumerate(sequential):
-        inputs = module(inputs)
+        X = module(X)
         # Support negative indices
         if i_module in module_indices or i_module - len(sequential) in module_indices:
-            activations.append(inputs)
+            activations.append(X)
 
     assert len(activations) == len(module_indices), (
         activations,
@@ -55,64 +55,66 @@ def activations_at(sequential, inputs, module_indices):
 
 
 class Normalize(nn.Module):
-    def __init__(self, example_input):
+    def __init__(self, x_example):
         super().__init__()
-        n_channels = len(example_input)
-        d = example_input.device
+        n_channels = len(x_example)
+        d = x_example.device
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
         self.inv_scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
 
-    def fit(self, train_inputs, unit_range=False):
-        train_inputs = train_inputs.transpose(0, 1).flatten(1)  # Channel dimension first
+    def fit(self, X_train, unit_range=False):
+        X_train = X_train.transpose(0, 1).flatten(1)  # Channel dimension first
         
         if unit_range:  # Each channel in the range [0, 1] (in training data)
-            self.shift.copy_(train_inputs.min(1)[0])  # Min of each channel (in training data)
-            self.inv_scale.copy_(1. / (train_inputs.max(1)[0] - self.shift))
+            self.shift.copy_(X_train.min(1)[0])  # Min of each channel (in training data)
+            self.inv_scale.copy_(1. / (X_train.max(1)[0] - self.shift))
         else:
-            self.shift.copy_(train_inputs.mean(1))  # Mean of each channel
-            self.inv_scale.copy_(1. / train_inputs.std(1))
+            self.shift.copy_(X_train.mean(1))  # Mean of each channel
+            self.inv_scale.copy_(1. / X_train.std(1))
         
         return self
 
-    def forward(self, inputs):
-        size = [1] * inputs.ndim
+    def forward(self, X):
+        size = [1] * X.ndim
         size[1] = len(self.shift)
-        return (inputs - self.shift.expand(size)) * self.inv_scale.expand(size)
+        return (X - self.shift.expand(size)) * self.inv_scale.expand(size)
 
 
 class Whiten(nn.Module):
-    def __init__(self, example_input):
+    def __init__(self, x_example):
         super().__init__()
-        n_features = example_input.numel()
-        d = example_input.device
+        n_features = x_example.numel()
+        d = x_example.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
         self.w = nn.Parameter(torch.zeros(n_features, n_features, device=d), requires_grad=False)
 
-    def fit(self, train_inputs, zca=True):
+    def fit(self, X_train, zca=True):
         """
-        train_inputs: Training inputs
+        NOTE: If X_train contains images, this calculates separate means for each pixel location.
+
+        X_train: Training inputs
         zca: True --> ZCA, False --> PCA
         """
 
-        train_inputs = train_inputs.flatten(1)
-        self.mean.copy_(train_inputs.mean(0))
+        X_train = X_train.flatten(1)
+        self.mean.copy_(X_train.mean(0))
 
-        cov = torch.cov((train_inputs - self.mean).T)
+        cov = torch.cov((X_train - self.mean).T)
         eig_vals, eig_vecs = linalg.eigh(cov)
-        torch.mm(eig_vals.sqrt_().reciprocal_().diag(), eig_vecs.T, out=self.w)
+        torch.mm(eig_vals.rsqrt_().diag(), eig_vecs.T, out=self.w)
         if zca:
             self.w.copy_(eig_vecs.mm(self.w))
 
         return self
 
-    def forward(self, inputs):
-        return torch.mm(inputs.flatten(1) - self.mean, self.w.T)
+    def forward(self, X):
+        return torch.mm(X.flatten(1) - self.mean, self.w.T)
 
 
 _get_optimizer_warned = set()
 
 
-def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
+def get_optimizer(Optimizer, model, decay=[], no_decay=[], weight_decay=0, **kwargs):
     """
     Split parameters of `model` into those that will experience weight decay (weights) and those
     that won't (biases, normalization, embedding) and those that won't be updated at all. Inspired
@@ -120,10 +122,10 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
     https://github.com/karpathy/minGPT/blob/3ed14b2cec0dfdad3f4b2831f2b4a86d11aef150/mingpt/model.py#L136
     """
 
-    whitelist_modules = ("Conv", "Linear", "Bilinear")
-    blacklist_modules = ("LayerNorm", "BatchNorm", "Embedding")
+    decay = ["Conv", "Linear", "Bilinear"] + decay
+    no_decay = ["LayerNorm", "BatchNorm", "Embedding"] + no_decay
 
-    decay, no_decay = [], []
+    decay_params, no_decay_params = [], []
     for module in model.modules():
         module_name = type(module).__name__
 
@@ -131,17 +133,14 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
             if not param.requires_grad:
                 continue  # Won't be updated.
 
-            elif any(n in module_name for n in blacklist_modules):
-                no_decay.append(param)  # Don't decay blacklist.
+            elif any(n in module_name for n in no_decay):
+                no_decay_params.append(param)  # Don't decay
 
             elif param_name.endswith("bias"):
-                no_decay.append(param)  # Don't decay biases.
+                no_decay_params.append(param)  # Don't decay biases
 
-            elif param_name.endswith("weight") and any(n in module_name for n in whitelist_modules):
-                decay.append(param)  # Decay whitelist weights.
-
-            elif param_name == "coefs" and "SVM" in module_name:
-                decay.append(param)
+            elif param_name.endswith("weight") and any(n in module_name for n in decay):
+                decay_params.append(param)  # Decay weights
 
             else:
                 if (module_name, param_name) not in _get_optimizer_warned:
@@ -151,19 +150,19 @@ def get_optimizer(Optimizer, model, weight_decay=0, **kwargs):
                     )
                     _get_optimizer_warned.add((module_name, param_name))
 
-                no_decay.append(param)
+                no_decay_params.append(param)
 
     groups = [
-        {"params": decay, "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0},
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0},
     ]
     optimizer = Optimizer(groups, **kwargs)
     return optimizer
 
 
-def gradient_noise(model, i_input, initial_variance=0.01):
+def gradient_noise(model, i_x, initial_variance=0.01):
     with torch.no_grad():
-        std = math.sqrt(initial_variance / (1 + i_input / 100) ** 0.55)
+        std = math.sqrt(initial_variance / (1 + i_x / 100) ** 0.55)
         for param in model.parameters():
             param.grad.add_(torch.randn_like(param.grad), alpha=std)
 
@@ -175,7 +174,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     init: Whether to initialize the net with random weights
     """
 
-    (train_inputs, train_targets), (val_inputs, val_targets) = data
+    (X_train, y_train), (X_val, y_val) = data
     net.train()
 
     # Restarts seem to increase accuracy on the original validation images, but
@@ -194,36 +193,36 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     min_val_optim_state = optimizer.state_dict() if restarts else None
 
     for epoch in range(n_epochs):
-        perm = torch.randperm(len(train_inputs))
-        train_inputs, train_targets = train_inputs[perm], train_targets[perm]
+        perm = torch.randperm(len(X_train))
+        X_train, y_train = X_train[perm], y_train[perm]
 
         if init and epoch == 0:
-            # GPU memory must be large enough to evaluate all validation inputs without gradients,
-            # so we can reuse that as an upper bound on the number of inputs to give to LSUV.
-            LSUV_(net, train_inputs[: len(val_inputs)])
+            # GPU memory must be large enough to evaluate all validation X without gradients,
+            # so we can reuse that as an upper bound on the number of X to give to LSUV.
+            LSUV_(net, X_train[: len(X_val)])
 
         loss = None
-        for i_input in range(0, len(train_inputs), batch_size):
-            batch_inputs = train_inputs[i_input: i_input + batch_size]
-            batch_targets = train_targets[i_input: i_input + batch_size]
-            batch_outputs = net(batch_inputs)
+        for i_x in range(0, len(X_train), batch_size):
+            batch_X = X_train[i_x: i_x + batch_size]
+            batch_outputs = net(batch_X)
+            batch_y = y_train[i_x: i_x + batch_size]
 
-            loss = F.cross_entropy(batch_outputs, batch_targets)
+            loss = F.cross_entropy(batch_outputs, batch_y)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            gradient_noise(net, i_input)
+            gradient_noise(net, i_x)
             optimizer.step()
 
         with torch.no_grad():
             net.eval()
-            print(f"Epoch {epoch} ({len(train_inputs)//1000}k samples per epoch)")
+            print(f"Epoch {epoch} ({len(X_train)//1000}k samples per epoch)")
             print(f"Last batch loss {loss.item()}")
-            eval.print_multi_acc(batch_outputs, batch_targets, "Batch")
+            eval.print_multi_acc(batch_outputs, batch_y, "Batch")
 
-            val_outputs = net(val_inputs)
-            val_loss = F.cross_entropy(val_outputs, val_targets).item()
+            val_outputs = net(X_val)
+            val_loss = F.cross_entropy(val_outputs, y_val).item()
             print("Validation loss", val_loss)
-            eval.print_multi_acc(val_outputs, val_targets, "Validation")
+            eval.print_multi_acc(val_outputs, y_val, "Validation")
 
             if val_loss <= min_val_loss:
                 min_val_loss = val_loss

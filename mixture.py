@@ -1,5 +1,3 @@
-from typing import Any, Dict
-
 import matplotlib.pyplot as plt
 import pykeops.torch as ke
 import torch
@@ -105,7 +103,7 @@ class DetectorMixture(nn.Module):
     def get_extra_state(self):
         return (self.mixture.get_params(), self.mixture.model_.state_dict())
 
-    def set_extra_state(self, extra_state: Dict):
+    def set_extra_state(self, extra_state):
         assert len(extra_state) == 2, extra_state
         self.mixture.set_params(extra_state[0])
         self.mixture.model_.load_state_dict(extra_state[1])

@@ -6,54 +6,67 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import train
+from train import Normalize
 
 
-def preprocess(n_train, points, targets):
-    """NOTE: Number of returned training points is less than `n_train`, because negative training
-    points are discarded."""
+def preprocess(n_train, X, y):
+    X_train, X_val, y_train, y_val = X[:n_train], X[n_train:], y[:n_train], y[n_train:]
+    
+    X_train_pos, X_train_neg = X_train[y_train], X_train[~y_train]
+    X_val_pos, X_val_neg = X_val[y_val], X_val[~y_val]
+    
+    max_len = len(X_train_pos)
+    norm = Normalize(X_train_pos[0]).fit(X_train_pos, unit_range=True)
+    return tuple(
+        None if len(X) == 0 else norm(X[torch.randperm(len(X))[:max_len]]) for
+        X in (X_train_pos, X_train_neg, X_val_pos, X_val_neg)
+    )
 
-    train_points = points[:n_train][targets[:n_train]]
-    val_points, val_targets = points[n_train:], targets[n_train:]
-    normalize = train.Normalize(train_points[0]).fit(train_points, unit_range=True)
-    return normalize(train_points), normalize(val_points), val_targets
+
+def spiral(n_train, n_val, device):
+    angle = torch.linspace(0, 2 * np.pi, n_train + n_val + 1, device=device)[:-1]
+    X = torch.stack((0.5 + 0.4 * (angle / 7) * angle.cos(), 0.5 + 0.3 * angle.sin()), 1)
+    X.add_(torch.randn(X.shape, device=device), alpha=0.02)
+    X = 3 * X[torch.randperm(len(X))]
+    y = torch.ones(len(X), dtype=torch.bool, device=X.device)
+    return preprocess(n_train, X, y)
 
 
 def circles(n_train, n_val, device):
-    points = torch.randn((n_train + n_val, 2), device=device) * 4
+    X = torch.randn((n_train + n_val, 2), device=device) * 4
     # Torch optimizes `pow(b)` for integer b in (-32, 32)
-    targets = (points[:, 0] - 1).pow(2) + (points[:, 1] - 1).pow(2) < 0.5
-    targets = targets | ((points[:, 0] + 1).pow(2) + (points[:, 1] + 1).pow(2) < 0.5)
-    return preprocess(n_train, points, targets)
+    y = (X[:, 0] - 1).pow(2) + (X[:, 1] - 1).pow(2) < 0.5
+    y = y | ((X[:, 0] + 1).pow(2) + (X[:, 1] + 1).pow(2) < 0.5)
+    return preprocess(n_train, X, y)
 
 
 def triangle(n_train, n_val, device):
-    points = torch.rand(n_train + n_val, 2, device=device) * 4
+    X = torch.rand(n_train + n_val, 2, device=device) * 4
     # Torch optimizes `pow(b)` for integer b in (-32, 32)
-    targets = 2 * points[:, 0] < points[:, 1]
-    return preprocess(n_train, points, targets)
+    y = 2 * X[:, 0] < X[:, 1]
+    return preprocess(n_train, X, y)
 
 
 def line(n_train, n_val, device):
-    points = torch.randn((n_train + n_val, 2), device=device) * 4 + 1
-    targets = (points[:, 0] < 0) & (torch.abs(points[:, 0] - points[:, 1]) < 0.8)
-    return preprocess(n_train, points, targets)
+    X = torch.randn((n_train + n_val, 2), device=device) * 4 + 1
+    y = (X[:, 0] < 0) & (torch.abs(X[:, 0] - X[:, 1]) < 0.8)
+    return preprocess(n_train, X, y)
 
 
 def hollow(n_train, n_val, device, n_dim=2):
-    points = torch.randn((n_train + n_val, n_dim), device=device) * 4
-    dists = torch.norm(points, dim=1)
-    targets = (dists > 3 * math.sqrt(n_dim)) & (dists < 5 * math.sqrt(n_dim))
-    return preprocess(n_train, points, targets)
+    X = torch.randn((n_train + n_val, n_dim), device=device) * 4
+    dists = torch.norm(X, dim=1)
+    y = (dists > 3 * math.sqrt(n_dim)) & (dists < 5 * math.sqrt(n_dim))
+    return preprocess(n_train, X, y)
 
 
-def save(train_inputs, val_inputs, val_targets, name):
-    torch.save((train_inputs, val_inputs, val_targets), f"data/{name}.pt")
+def save(X_train, X_val, y_val, name):
+    torch.save((X_train, X_val, y_val), f"data/{name}.pt")
 
 
 def load(name):
-    train_inputs, val_inputs, val_targets = torch.load(f"data/{name}.pt")
-    return train_inputs, val_inputs, val_targets
+    X_train, X_val, y_val = torch.load(f"data/{name}.pt")
+    return X_train, X_val, y_val
 
 
 def _get_colors(outputs, min_output, max_output, channel):
@@ -67,19 +80,19 @@ def _get_colors(outputs, min_output, max_output, channel):
     return colors
 
 
-def scatter_outputs_targets(points, outputs, targets, model_name, centers=None):
-    points = points.detach().cpu().numpy()
+def scatter_outputs_y(X, outputs, y, model_name, centers=None):
+    X = X.detach().cpu().numpy()
     outputs = outputs.detach().cpu().numpy()
 
-    pos = targets.detach().cpu().numpy()
+    pos = y.detach().cpu().numpy()
     neg = np.logical_not(pos)
     pos_output = outputs > 0
     neg_output = np.logical_not(pos_output)
 
-    pos_pos_output = points[pos & pos_output]  # true positive
-    neg_pos_output = points[neg & pos_output]  # false positive
-    pos_neg_output = points[pos & neg_output]  # false negative
-    neg_neg_output = points[neg & neg_output]  # true negative
+    pos_pos_output = X[pos & pos_output]  # true positive
+    neg_pos_output = X[neg & pos_output]  # false positive
+    pos_neg_output = X[pos & neg_output]  # false negative
+    neg_neg_output = X[neg & neg_output]  # true negative
 
     pos_pos_outputs = outputs[pos & pos_output]  # true positive
     neg_pos_outputs = outputs[neg & pos_output]  # false positive
@@ -101,7 +114,7 @@ def scatter_outputs_targets(points, outputs, targets, model_name, centers=None):
     ax.set_title(model_name + " (marker=target, color=output)")
     ax.set_aspect("equal", adjustable="box")
 
-    plt.scatter(points[:, 0], points[:, 1], marker=",", c="0.8")
+    plt.scatter(X[:, 0], X[:, 1], marker=",", c="0.8")
     plt.scatter(pos_pos_output[:, 0], pos_pos_output[:, 1], marker="+", c=pos_pos_colors)
     plt.scatter(neg_pos_output[:, 0], neg_pos_output[:, 1], marker="v", c=neg_pos_colors)
     plt.scatter(pos_neg_output[:, 0], pos_neg_output[:, 1], marker="+", c=pos_neg_colors)
