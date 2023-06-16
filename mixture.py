@@ -10,10 +10,11 @@ import torch
 from pycave.bayes import GaussianMixture
 from torch import linalg, nn
 from torch.nn.functional import softmax
+from torch.distributions.multivariate_normal import MultivariateNormal
 
 import data2d
 import train
-from cluster import cluster_covs_weights_, kmeans
+from cluster import cluster_var_pr_, kmeans
 from eval import acc, percent
 
 
@@ -58,7 +59,7 @@ class DetectorKe(nn.Module):
         self.cov_inv = torch.matmul(self.cov_inv_sqrt, self.cov_inv_sqrt.transpose(1, 2))
         self.coef = self.pr * self.cov_inv.det().sqrt()
 
-    def likelihoods(self, X):
+    def likelihood(self, X):
         """
         Returns density at each point (up to a constant factor depending on the number of features)
         """
@@ -68,7 +69,7 @@ class DetectorKe(nn.Module):
         )
         return d_ij.exp().matvec(self.coef).view(-1)
 
-    def log_likelihoods(self, X):
+    def log_likelihood(self, X):
         """
         Returns density at each point (up to a constant term depending on the number of features)
         """
@@ -81,11 +82,11 @@ class DetectorKe(nn.Module):
     def net_ll(self, X_pos, X_neg):
         """Net log-likelihood, for maximizing balanced detection accuracy"""
 
-        ll_pos = self.log_likelihoods(X_pos)
+        ll_pos = self.log_likelihood(X_pos)
         if X_neg is None:
             return ll_pos.mean()
 
-        ll_neg = self.log_likelihoods(X_neg)
+        ll_neg = self.log_likelihood(X_neg)
         with torch.no_grad():
             # For detection, it's important that `ll_pos >= ll_neg + margin` and
             # `ll_neg <= ll_pos - margin`, so `ll_pos > ll_neg.max() + margin` is just as good as
@@ -97,7 +98,7 @@ class DetectorKe(nn.Module):
         return ll_pos.clamp(max=high).mean() - ll_neg.clamp(min=low).mean()
 
     def forward(self, X):
-        return self.log_likelihoods(X) - self.threshold
+        return self.log_likelihood(X) - self.threshold
 
     def fit(
         self,
@@ -160,10 +161,12 @@ class DetectorKe(nn.Module):
                 break
 
         self.load_state_dict(min_state)
-        threshold = self.log_likelihoods(X_train_pos).min()
+        threshold = self.log_likelihood(X_train_pos).min()
         if X_train_neg is not None:
-            threshold = 0.5 * (threshold + self.log_likelihoods(X_train_neg).max())
+            threshold = 0.5 * (threshold + self.log_likelihood(X_train_neg).max())
+        print("threshold 1", threshold)
         self.threshold.copy_(threshold)
+        print("threshold 2", self.threshold)
 
         if plot:
             if X_val_pos is not None:
@@ -215,7 +218,7 @@ class DetectorKe(nn.Module):
         # Heatmap
         res = int(math.sqrt(len(self.grid)))
         with torch.no_grad():
-            heatmap = self.likelihoods(self.grid)
+            heatmap = self.likelihood(self.grid)
         heatmap = heatmap.view(res, res).cpu().numpy()  # reshape as a "background" image
 
         scale = np.amax(np.abs(heatmap[:]))
@@ -231,7 +234,7 @@ class DetectorKe(nn.Module):
 
         # Log-contours
         with torch.no_grad():
-            log_heatmap = self.log_likelihoods(self.grid)
+            log_heatmap = self.log_likelihood(self.grid)
         log_heatmap = log_heatmap.view(res, res).cpu().numpy()
 
         scale = np.amax(np.abs(log_heatmap[:]))
@@ -272,9 +275,9 @@ class DetectorMixture(nn.Module):
         self.mixture.model_.load_state_dict(extra_state[1])
 
     def forward(self, X):
-        return self.log_likelihoods(X) - self.threshold
+        return self.log_likelihood(X) - self.threshold
 
-    def log_likelihoods(self, X):
+    def log_likelihood(self, X):
         """Likelihood of learned distribution at each point (ignoring which component it's from)"""
         return -self.mixture.score_samples(X).flatten()
 
@@ -284,22 +287,59 @@ class DetectorMixture(nn.Module):
 
     def fit_predict(self, X_train):
         self.mixture.fit(X_train)
-        log_likelihoods = self.log_likelihoods(X_train)
-        self.threshold.copy_(log_likelihoods.min())
+        log_likelihood = self.log_likelihood(X_train)
+        self.threshold.copy_(log_likelihood.min())
         # There doesn't seem to be a nice way to get the means
         self.center = self.mixture.model_.means
-        return log_likelihoods - self.threshold
+        return log_likelihood - self.threshold
+
+
+class DetectorKmeans(nn.Module):
+    def __init__(self, x_example, n_centers):
+        super().__init__()
+
+        n_features, dtype, device = len(x_example), x_example.dtype, x_example.device
+        self.center = nn.Parameter(torch.empty(n_centers, n_features, dtype=dtype, device=device))
+        self.var = nn.Parameter(torch.empty(n_centers, dtype=dtype, device=device))
+        self.pr = nn.Parameter(torch.empty(n_centers, dtype=dtype, device=device))
+        self.threshold = nn.Parameter(
+            torch.empty(1, dtype=dtype, device=device),
+            requires_grad=False
+        )
+        self.log_2pi = math.log(2. * math.pi)
+    
+    def density(self, X):
+        x_center_sqdist = (X[:, None, :] - self.center[None, :, :]).pow(2).sum(-1)
+        return x_center_sqdist.reciprocal().mv(self.pr * self.var)
+
+    def forward(self, X):
+        return self.density(X) - self.threshold        
+    
+    def fit(self, X_train_pos):
+        with torch.no_grad():
+            self.center.copy_(kmeans(X_train_pos, len(self.center)))
+            cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
+            # print("centers", self.center)
+            # print("x0", X_train_pos[0])
+            # print("x0 - centers", X_train_pos[:1, None, :] - self.center[None, :, :])
+            # print(
+            #     "dists(x0 - centers)",
+            #     (X_train_pos[:1, None, :] - self.center[None, :, :]).pow(2).sum(-1)
+            # )
+            self.threshold.copy_(self.density(X_train_pos).min())
+        
+        return self
 
 
 if __name__ == "__main__":
-    device = "cuda"
-    X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.hollow(10000, 10000, device, 2)
+    device = "cpu"
+    X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.hollow(5000, 5000, device, 2)
     print(
         f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
         len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
     )
 
-    n_runs = 1
+    n_runs = 3
     balanced_accs = torch.zeros(n_runs)
     for i_run in range(n_runs):
         print(f"-------------------------------- Run {i_run} --------------------------------")
@@ -312,12 +352,13 @@ if __name__ == "__main__":
         #     init_strategy="kmeans",
         #     batch_size=10000,
         # ).fit(X_train_pos)
-        detector = DetectorKe(
-            X_train_pos[0],
-            n_centers,
-            equal_clusters=True,
-            full_cov=False
-        ).fit(X_train_pos, X_train_neg, n_epochs=500, sparsity=0, plot=True)
+        # detector = DetectorKe(
+        #     X_train_pos[0],
+        #     n_centers,
+        #     equal_clusters=True,
+        #     full_cov=False
+        # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
+        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(X_train_pos)
         print("fit time:", time.time() - start)
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
         acc_on_pos, acc_on_neg = acc(outputs_pos > 0), acc(outputs_neg <= 0)

@@ -109,28 +109,22 @@ def kmeans(X_train, n_centers, accuracy=0.9999):
     return kmeans_lloyd(X_train, centers, accuracy)
 
 
-def cluster_covs_weights_(cov, weight, X_train, centers):
+def cluster_var_pr_(var, pr, X_train, centers):
     """
-    Overwrites `cov` and `weight`
+    Overwrites `var` and `pr`
 
-    cov: Covariance matrix for each cluster (size=(n_centers, c, c), where c==1 or c==n_features)
-    weight: Weight proportional to probability of each cluster (n_centers)
+    var: Variance for each cluster (n_centers)
+    pr: Weight proportional to probability of each cluster (n_centers)
     X_train: Training points (n_points, n_features)
     centers: Center of each cluster (n_centers, n_features)
     """
 
-    x_i = LazyTensor(X_train[:, None, :])
-    center_j = LazyTensor(centers[None, :, :])
-    dist_ij = x_i.sqdist(center_j)
-    j_center_from_i = dist_ij.argmin(dim=1).view(-1)
-
-    c = cov.size(1)
-    print(f"cov.size(1) = {c}")
-    for j_center in range(len(centers)):
-        X_center = X_train[j_center_from_i == j_center]
-        weight[j_center] = len(X_center)  # Number of points in this cluster
-        cov[j_center].copy_(X_center.var() if c == 1 else X_center.T.cov())
-        print(len(X_center), X_center.var())
+    # OPTIM: LazyTensor with gather?
+    dist_ij = (X_train[:, None, :] - centers[None, :, :]).pow(2).sum(2)
+    j_center_from_i = dist_ij.argmin(dim=1)
+    for j in range(len(centers)):
+        var[j] = dist_ij[j_center_from_i == j].mean()
+    pr.copy_(j_center_from_i.bincount(minlength=len(centers)) / float(len(X_train)))
 
 
 def bench():
