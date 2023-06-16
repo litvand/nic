@@ -125,10 +125,12 @@ def cluster_covs_weights_(cov, weight, X_train, centers):
     j_center_from_i = dist_ij.argmin(dim=1).view(-1)
 
     c = cov.size(1)
+    print(f"cov.size(1) = {c}")
     for j_center in range(len(centers)):
         X_center = X_train[j_center_from_i == j_center]
         weight[j_center] = len(X_center)  # Number of points in this cluster
         cov[j_center].copy_(X_center.var() if c == 1 else X_center.T.cov())
+        print(len(X_center), X_center.var())
 
 
 def bench():

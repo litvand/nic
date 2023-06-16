@@ -56,7 +56,7 @@ def line(n_train, n_val, device):
 def hollow(n_train, n_val, device, n_dim=2):
     X = torch.randn((n_train + n_val, n_dim), device=device) * 4
     dists = torch.norm(X, dim=1)
-    y = (dists > 3 * math.sqrt(n_dim)) & (dists < 5 * math.sqrt(n_dim))
+    y = (dists > 3.5 * math.sqrt(n_dim)) & (dists < 4.5 * math.sqrt(n_dim))
     return preprocess(n_train, X, y)
 
 

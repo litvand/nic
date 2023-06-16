@@ -271,12 +271,12 @@ class DetectorMixture(nn.Module):
         self.mixture.set_params(extra_state[0])
         self.mixture.model_.load_state_dict(extra_state[1])
 
-    def forward(self, points):
-        return self.densities(points) - self.threshold
+    def forward(self, X):
+        return self.log_likelihoods(X) - self.threshold
 
-    def densities(self, points):
-        """Density of learned distribution at each point (ignoring which component it's from)"""
-        return torch.exp(-self.mixture.score_samples(points).flatten())
+    def log_likelihoods(self, X):
+        """Likelihood of learned distribution at each point (ignoring which component it's from)"""
+        return -self.mixture.score_samples(X).flatten()
 
     def fit(self, X_train):
         self.fit_predict(X_train)
@@ -284,22 +284,27 @@ class DetectorMixture(nn.Module):
 
     def fit_predict(self, X_train):
         self.mixture.fit(X_train)
-        densities = self.densities(X_train)
-        self.threshold.copy_(densities.min())
+        log_likelihoods = self.log_likelihoods(X_train)
+        self.threshold.copy_(log_likelihoods.min())
         # There doesn't seem to be a nice way to get the means
-        self.center = mixture.model_.means
-        return densities - self.threshold
+        self.center = self.mixture.model_.means
+        return log_likelihoods - self.threshold
 
 
 if __name__ == "__main__":
     device = "cuda"
-    X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.hollow(5000, 5000, device)
+    X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.hollow(10000, 10000, device, 2)
+    print(
+        f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
+        len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
+    )
 
     n_runs = 1
     balanced_accs = torch.zeros(n_runs)
     for i_run in range(n_runs):
         print(f"-------------------------------- Run {i_run} --------------------------------")
-        n_centers = 2 + len(X_train_pos) // 28
+        n_centers = 2 + len(X_train_pos) // 25
+        print(f"n_centers: {n_centers}")
         start = time.time()
         # detector = DetectorMixture(
         #     num_components=n_centers,
@@ -312,13 +317,13 @@ if __name__ == "__main__":
             n_centers,
             equal_clusters=True,
             full_cov=False
-        ).fit(X_train_pos, X_train_neg, X_val_pos, X_val_neg, n_epochs=0, sparsity=0, plot=False)
+        ).fit(X_train_pos, X_train_neg, n_epochs=500, sparsity=0, plot=True)
         print("fit time:", time.time() - start)
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
         acc_on_pos, acc_on_neg = acc(outputs_pos > 0), acc(outputs_neg <= 0)
         balanced_accs[i_run] = 0.5 * (acc_on_pos + acc_on_neg)
 
-    print("Expecting equal clusters:", model.__dict__.get("equal_clusters", "pycave"))
+    print("Expecting equal clusters:", getattr(detector, "equal_clusters", "pycave"))
     print(
         "Balanced validation accuracy:",
         f"{percent(balanced_accs.mean())} +- {percent(3. * balanced_accs.std())}"
@@ -326,24 +331,23 @@ if __name__ == "__main__":
 
     # More detailed results from the last run
     print("True positive rate, true negative rate:", percent(acc_on_pos), percent(acc_on_neg))
-    print(f"Number of positive training points: {len(X_train_pos)}")
     print("Likelihood threshold:", detector.threshold)
     data2d.scatter_outputs_y(
         X_train_pos,
         detector(X_train_pos),
         X_train_neg,
         detector(X_train_neg),
-        f"{str(type(detector))} training",
+        f"{type(detector).__name__} training",
         centers=detector.center,
     )
-    data2d.scatter_outputs_y(
-        X_val_pos,
-        outputs_pos,
-        X_val_neg,
-        outputs_neg,
-        f"{str(type(detector))} validation",
-        centers=detector.center,
-    )
+    # data2d.scatter_outputs_y(
+    #     X_val_pos,
+    #     outputs_pos,
+    #     X_val_neg,
+    #     outputs_neg,
+    #     f"{type(detector).__name__} validation",
+    #     centers=detector.center,
+    # )
     # eval.plot_distr_overlap(
     #     val_outputs[y_val],
     #     val_outputs[~y_val],
