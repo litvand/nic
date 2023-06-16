@@ -105,7 +105,8 @@ def kmeans(X_train, n_centers, accuracy=0.9999):
     Returns: Cluster centers (size = n_centers, n_features)
     """
 
-    centers = X_train[torch.randperm(len(X_train))[:n_centers]]
+    # centers = X_train[torch.randperm(len(X_train))[:n_centers]]
+    centers = kmeans_plusplus(X_train, n_centers)
     return kmeans_lloyd(X_train, centers, accuracy)
 
 
@@ -119,11 +120,11 @@ def cluster_var_pr_(var, pr, X_train, centers):
     centers: Center of each cluster (n_centers, n_features)
     """
 
-    # OPTIM: LazyTensor with gather?
-    dist_ij = (X_train[:, None, :] - centers[None, :, :]).pow(2).sum(2)
-    j_center_from_i = dist_ij.argmin(dim=1)
+    diff_ij = LazyTensor(X_train[:, None, :]) - LazyTensor(centers[None, :, :])
+    j_center_from_i = (diff_ij**2).sum(2).argmin(1).view(len(X_train))
     for j in range(len(centers)):
-        var[j] = dist_ij[j_center_from_i == j].mean()
+        X_center = X_train[j_center_from_i == j]
+        var[j] = 1e-8 if len(X_center) < 2 else X_center.var(0).sum()
     pr.copy_(j_center_from_i.bincount(minlength=len(centers)) / float(len(X_train)))
 
 

@@ -306,11 +306,10 @@ class DetectorKmeans(nn.Module):
             torch.empty(1, dtype=dtype, device=device),
             requires_grad=False
         )
-        self.log_2pi = math.log(2. * math.pi)
     
     def density(self, X):
-        x_center_sqdist = (X[:, None, :] - self.center[None, :, :]).pow(2).sum(-1)
-        return x_center_sqdist.reciprocal().mv(self.pr * self.var)
+        diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
+        return (1. / (diff_ij**2).sum(2)) @ (self.pr * self.var)
 
     def forward(self, X):
         return self.density(X) - self.threshold        
@@ -319,32 +318,30 @@ class DetectorKmeans(nn.Module):
         with torch.no_grad():
             self.center.copy_(kmeans(X_train_pos, len(self.center)))
             cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
-            # print("centers", self.center)
-            # print("x0", X_train_pos[0])
-            # print("x0 - centers", X_train_pos[:1, None, :] - self.center[None, :, :])
-            # print(
-            #     "dists(x0 - centers)",
-            #     (X_train_pos[:1, None, :] - self.center[None, :, :]).pow(2).sum(-1)
-            # )
             self.threshold.copy_(self.density(X_train_pos).min())
         
         return self
 
 
 if __name__ == "__main__":
-    device = "cpu"
-    X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.hollow(5000, 5000, device, 2)
-    print(
-        f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
-        len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
-    )
+    device = "cuda"
+    fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 3
-    balanced_accs = torch.zeros(n_runs)
-    for i_run in range(n_runs):
-        print(f"-------------------------------- Run {i_run} --------------------------------")
+    n_runs = 12
+    accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
+    for run in range(n_runs):
+        print(f"-------------------------------- Run {run} --------------------------------")
+
+        fn = fns[run % len(fns)]
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device)
+        print(
+            f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
+            len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
+        )
+        
         n_centers = 2 + len(X_train_pos) // 25
         print(f"n_centers: {n_centers}")
+        
         start = time.time()
         # detector = DetectorMixture(
         #     num_components=n_centers,
@@ -360,27 +357,31 @@ if __name__ == "__main__":
         # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
         detector = DetectorKmeans(X_train_pos[0], n_centers).fit(X_train_pos)
         print("fit time:", time.time() - start)
-        outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
-        acc_on_pos, acc_on_neg = acc(outputs_pos > 0), acc(outputs_neg <= 0)
-        balanced_accs[i_run] = 0.5 * (acc_on_pos + acc_on_neg)
 
-    print("Expecting equal clusters:", getattr(detector, "equal_clusters", "pycave"))
+        outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
+        accs_on_pos[run], accs_on_neg[run] = acc(outputs_pos > 0), acc(outputs_neg <= 0)
+
+    print("Expecting equal clusters:", getattr(detector, "equal_clusters", None))
+    balanced_accs = 0.5 * (accs_on_pos + accs_on_neg)
     print(
         "Balanced validation accuracy:",
         f"{percent(balanced_accs.mean())} +- {percent(3. * balanced_accs.std())}"
     )
+    print(
+        "True positive rate, true negative rate:",
+        percent(accs_on_pos.mean()), percent(accs_on_neg.mean())
+    )
 
     # More detailed results from the last run
-    print("True positive rate, true negative rate:", percent(acc_on_pos), percent(acc_on_neg))
-    print("Likelihood threshold:", detector.threshold)
-    data2d.scatter_outputs_y(
-        X_train_pos,
-        detector(X_train_pos),
-        X_train_neg,
-        detector(X_train_neg),
-        f"{type(detector).__name__} training",
-        centers=detector.center,
-    )
+    # print("Likelihood threshold:", detector.threshold)
+    # data2d.scatter_outputs_y(
+    #     X_train_pos,
+    #     detector(X_train_pos),
+    #     X_train_neg,
+    #     detector(X_train_neg),
+    #     f"{type(detector).__name__} training",
+    #     centers=detector.center,
+    # )
     # data2d.scatter_outputs_y(
     #     X_val_pos,
     #     outputs_pos,
