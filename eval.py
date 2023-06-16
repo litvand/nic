@@ -30,6 +30,10 @@ def percent(x):
     return f"{round(100 * x.item(), 2)}%"
 
 
+def acc(is_correct):
+    return div_zero(is_correct.count_nonzero(), len(is_correct))
+
+
 def bin_acc(outputs, targets):
     """
     Get binary classification accuracy, balanced accuracy, true positive and true negative rate
@@ -40,14 +44,10 @@ def bin_acc(outputs, targets):
 
     outputs = outputs > 0
     assert targets.dtype == torch.bool, targets.dtype
-    acc = div_zero(torch.count_nonzero(outputs == targets), len(targets))
-
-    on_pos, on_neg = outputs[targets], outputs[~targets]
-    acc_on_pos = div_zero(on_pos.count_nonzero(), len(on_pos))
-    acc_on_neg = div_zero(len(on_neg) - on_neg.count_nonzero(), len(on_neg))
-
-    balanced = (acc_on_pos + acc_on_neg) / 2
-    return acc, balanced, acc_on_pos, acc_on_neg
+    acc_total = acc(outputs == targets)
+    acc_on_pos, acc_on_neg = acc(outputs[targets]), acc(~outputs[~targets])
+    balanced = 0.5 * (acc_on_pos + acc_on_neg)
+    return acc_total, balanced, acc_on_pos, acc_on_neg
 
 
 def print_bin_acc(outputs, targets, model_name):

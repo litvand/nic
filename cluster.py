@@ -99,7 +99,7 @@ def kmeans_lloyd(X_train, centers, accuracy):
 
 def kmeans(X_train, n_centers, accuracy=0.9999):
     """
-    X_train: Training X (size = n_X, n_features)
+    X_train: Training points (size = n_points, n_features)
     n_centers: Number of centers
 
     Returns: Cluster centers (size = n_centers, n_features)

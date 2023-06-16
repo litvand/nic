@@ -1,64 +1,222 @@
+import math
+import time
+from copy import deepcopy
+
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+import numpy as np
 import pykeops.torch as ke
 import torch
-import torch.nn.functional as F
 from pycave.bayes import GaussianMixture
-from torch import nn
+from torch import linalg, nn
+from torch.nn.functional import softmax
 
 import data2d
-import eval
 import train
+from cluster import cluster_covs_weights_, kmeans
+from eval import acc, percent
 
 
 class DetectorKe(nn.Module):
-    def __init__(self, example_input, n_centers):
+    def __init__(self, x_example, n_centers, equal_clusters=True, full_cov=True):
         super().__init__()
 
-        n_features, dtype = len(example_input), example_input.dtype
-        self.centers = nn.Parameter(torch.empty(n_centers, n_features, dtype=dtype))
-        self.covs_inv_sqrt = nn.Parameter(
-            torch.empty(n_centers, n_features, n_features, dtype=dtype)
-        )
-        self.covs_inv = None  # Calculated based on covs_inv_sqrt
-        self.weights = nn.Parameter(torch.empty(n_centers, dtype=dtype))
+        n_features, dtype, device = len(x_example), x_example.dtype, x_example.device
+        self.center = nn.Parameter(torch.rand(n_centers, n_features, dtype=dtype, device=device))
+
+        # OPTIM: Custom code for spherical clusters without full covariance
+        c = n_features if full_cov else 1
+        self.cov_inv_sqrt = nn.Parameter(torch.empty(n_centers, c, c, dtype=dtype, device=device))
+        self.weight = nn.Parameter(torch.ones(n_centers, dtype=dtype, device=device))
+
+        # Whether clusters are approximately equally probable (--> don't use softmax):
+        self.equal_clusters = nn.Parameter(torch.tensor(equal_clusters), requires_grad=False)
+        # Keep boolean parameters and the threshold on the CPU.
         self.threshold = nn.Parameter(torch.tensor(torch.nan, dtype=dtype), requires_grad=False)
 
-    def refresh(self):
-        """Updates intermediate variables for calculating likelihoods based on parameters."""
-        self.covs_inv = torch.matmul(self.covs_inv_sqrt, self.covs_inv_sqrt.transpose(1, 2))
-        self.coefs = F.softmax(self.weights) * self.covs_inv.det().sqrt()
+        self.cov_inv, self.pr, self.coef = None, None, None
+        self.refresh()
+
+        self.grid = None
 
     def get_extra_state(self):
         return 1  # Make sure `set_extra_state` is called
 
     def set_extra_state(self, _):
-        assert not self.threshold.isnan().item(), self.threshold  # Other state was already loaded
+        # assert not self.threshold.isnan().item(), self.threshold  # Other state was already loaded
         self.refresh()
 
-    def likelihoods(self, points):
-        dists = ke.Vi(points).weightedsqdist(ke.Vj(self.centers), ke.Vj(self.covs_inv))
-        return self.coefs * (-dists).exp()
+    def refresh(self):
+        """Update intermediate variables when the model's parameters change."""
 
-    def log_likelihoods(self, points):
-        """Log-density, sampled on a given point cloud."""
-        self.update_covariances()
-        K_ij = -Vi(points).weightedsqdist(Vj(self.centers), Vj(self.params["gamma"]))
-        return K_ij.logsumexp(dim=1, weight=Vj(self.weights()))
+        if self.equal_clusters.item():
+            weight = self.weight.abs()
+            self.pr = weight / weight.sum()
+        else:
+            self.pr = softmax(self.weight, 0)
 
-    def neglog_likelihood(self, points):
-        """Returns -log(likelihood(points)) up to an additive factor."""
-        ll = self.log_likelihoods(points)
-        log_likelihood = torch.mean(ll)
-        # N.B.: We add a custom sparsity prior, which promotes empty clusters
-        #       through a soft, concave penalization on the class weights.
-        return -log_likelihood + self.sparsity * F.softmax(self.w, 0).sqrt().mean()
+        self.cov_inv = torch.matmul(self.cov_inv_sqrt, self.cov_inv_sqrt.transpose(1, 2))
+        self.coef = self.pr * self.cov_inv.det().sqrt()
 
-    def plot(self, points):
-        """Displays the model."""
-        plt.clf()
-        # Heatmap:
-        heatmap = self.likelihoods(grid)
-        heatmap = heatmap.view(res, res).data.cpu().numpy()  # reshape as a "background" image
+    def likelihoods(self, X):
+        """
+        Returns density at each point (up to a constant factor depending on the number of features)
+        """
+
+        d_ij = -0.5 * ke.Vi(X).weightedsqdist(
+            ke.Vj(self.center.data), ke.Vj(self.cov_inv.flatten(1))
+        )
+        return d_ij.exp().matvec(self.coef).view(-1)
+
+    def log_likelihoods(self, X):
+        """
+        Returns density at each point (up to a constant term depending on the number of features)
+        """
+
+        d_ij = -0.5 * ke.Vi(X).weightedsqdist(
+            ke.Vj(self.center.data), ke.Vj(self.cov_inv.flatten(1))
+        )
+        return d_ij.logsumexp(dim=1, weight=ke.Vj(self.coef[:, None])).view(-1)
+
+    def net_ll(self, X_pos, X_neg):
+        """Net log-likelihood, for maximizing balanced detection accuracy"""
+
+        ll_pos = self.log_likelihoods(X_pos)
+        if X_neg is None:
+            return ll_pos.mean()
+
+        ll_neg = self.log_likelihoods(X_neg)
+        with torch.no_grad():
+            # For detection, it's important that `ll_pos >= ll_neg + margin` and
+            # `ll_neg <= ll_pos - margin`, so `ll_pos > ll_neg.max() + margin` is just as good as
+            # `ll_pos = ll_neg.max() + margin` and `ll_neg < ll_pos.min() - margin` is just as good
+            # as `ll_neg = ll_pos.min() - margin`.
+            edge_pos = ll_pos.min() - 2.
+            edge_neg = ll_neg.max() + 2.
+            low, high = min(edge_pos, edge_neg), max(edge_pos, edge_neg)
+        return ll_pos.clamp(max=high).mean() - ll_neg.clamp(min=low).mean()
+
+    def forward(self, X):
+        return self.log_likelihoods(X) - self.threshold
+
+    def fit(
+        self,
+        X_train_pos,
+        X_train_neg=None,
+        X_val_pos=None,
+        X_val_neg=None,
+        n_epochs=500,
+        sparsity=0,
+        plot=False,
+    ):
+        early_stop = 10000  # Early stop if loss hasn't decreased for this many epochs
+        val_interval = 5  # Validate/update min loss every this many epochs
+
+        with torch.no_grad():
+            self.center.copy_(kmeans(X_train_pos, len(self.center)))
+            cov = self.cov_inv_sqrt  # cov has same shape as cov_inv_sqrt
+            cluster_covs_weights_(cov, self.weight, X_train_pos, self.center)
+            # Increase covariance to account for ignoring points outside of the cluster (for
+            # each cluster).
+            cov *= 1.2
+            if cov.size(1) == 1:
+                cov.rsqrt_()
+            else:
+                # OPTIM: Inverse of triangular matrix after Cholesky decomposition
+                self.cov_inv_sqrt.copy_(linalg.inv_ex(linalg.cholesky_ex(cov)[0])[0])
+        self.refresh()
+
+        min_loss = float("inf")
+        min_state = self.state_dict()  # Not worth deepcopying
+        min_epoch = -1
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+        if plot:
+            losses_train, losses_val = [], ([] if X_val_pos is not None else None)
+
+        for epoch in range(n_epochs):
+            optimizer.zero_grad(set_to_none=True)
+            reg = sparsity * self.pr.sqrt().mean()
+            loss = reg - self.net_ll(X_train_pos, X_train_neg)
+            loss.backward()
+            optimizer.step()
+            self.refresh()
+            if plot:
+                losses_train.append(loss.item())
+
+            if epoch % val_interval == 0:
+                with torch.no_grad():
+                    if X_val_pos is not None:
+                        loss = -self.net_ll(X_val_pos, X_val_neg).item()
+                        if plot:
+                            losses_val.append(loss)
+
+                    if loss <= min_loss:
+                        min_loss = loss
+                        min_state = deepcopy(self.state_dict())
+                        min_epoch = epoch
+
+            if epoch - min_epoch >= early_stop:
+                break
+
+        self.load_state_dict(min_state)
+        threshold = self.log_likelihoods(X_train_pos).min()
+        if X_train_neg is not None:
+            threshold = 0.5 * (threshold + self.log_likelihoods(X_train_neg).max())
+        self.threshold.copy_(threshold)
+
+        if plot:
+            if X_val_pos is not None:
+                self.plot(X_val_pos, X_val_neg)
+            else:
+                self.plot(X_train_pos, X_train_neg)
+
+            if len(losses_train) == 0:
+                return self
+
+            losses_train = np.array(losses_train)
+            plt.figure()
+            plt.title("Epoch training loss")
+            plt.tight_layout()
+            plt.plot(losses_train)
+            min_epoch = losses_train.argmin()
+            print("Min training loss, epoch:", losses_train[min_epoch], min_epoch)
+
+            if X_val_pos is not None:
+                losses_val = np.array(losses_val)
+                plt.figure()
+                plt.title("Epoch validation loss")
+                plt.tight_layout()
+                plt.plot(np.arange(len(losses_val)) * val_interval, losses_val)
+                i_min = losses_val.argmin()
+                print("Min validation loss, epoch:", losses_val[i_min], i_min * val_interval)
+
+        return self
+
+    def plot(self, X, X_neg=None):
+        with torch.no_grad():
+            low, high = X.min().item(), X.max().item()
+        margin = 0.5 * (high - low)
+        low, high = low - margin, high + margin
+
+        if self.grid is None:
+            # Create a uniform grid on the unit square
+            res = 200
+            ticks = torch.linspace(low, high, res, dtype=X.dtype, device=X.device)
+            grid0 = ticks.view(res, 1, 1).expand(res, res, 1)
+            grid1 = ticks.view(1, res, 1).expand(res, res, 1)
+            self.grid = torch.cat((grid1, grid0), dim=-1).view(-1, 2).to(X.device, X.dtype)
+
+        plt.figure(figsize=(8, 8))
+        plt.title("Likelihood", fontsize=20)
+        plt.axis("equal")
+        plt.axis([low, high, low, high])
+
+        # Heatmap
+        res = int(math.sqrt(len(self.grid)))
+        with torch.no_grad():
+            heatmap = self.likelihoods(self.grid)
+        heatmap = heatmap.view(res, res).cpu().numpy()  # reshape as a "background" image
 
         scale = np.amax(np.abs(heatmap[:]))
         plt.imshow(
@@ -68,15 +226,16 @@ class DetectorKe(nn.Module):
             vmin=-scale,
             vmax=scale,
             cmap=cm.RdBu,
-            extent=(0, 1, 0, 1),
+            extent=(low, high, low, high),
         )
 
-        # Log-contours:
-        log_heatmap = self.log_likelihoods(grid)
-        log_heatmap = log_heatmap.view(res, res).data.cpu().numpy()
+        # Log-contours
+        with torch.no_grad():
+            log_heatmap = self.log_likelihoods(self.grid)
+        log_heatmap = log_heatmap.view(res, res).cpu().numpy()
 
         scale = np.amax(np.abs(log_heatmap[:]))
-        levels = np.linspace(-scale, scale, 41)
+        levels = np.linspace(-scale, scale, 81)
 
         plt.contour(
             log_heatmap,
@@ -84,12 +243,17 @@ class DetectorKe(nn.Module):
             linewidths=1.0,
             colors="#C8A1A1",
             levels=levels,
-            extent=(0, 1, 0, 1),
+            extent=(low, high, low, high),
         )
 
-        # Scatter plot of the dataset:
-        xy = points.data.cpu().numpy()
-        plt.scatter(xy[:, 0], xy[:, 1], 100 / len(xy), color="k")
+        # Scatter plot of the dataset
+        X = X.cpu().numpy()
+        plt.scatter(X[:, 0], X[:, 1], 1000 / len(X), c="green")
+        if X_neg is not None:
+            X_neg = X_neg.cpu().numpy()
+            plt.scatter(X_neg[:, 0], X_neg[:, 1], 1000 / len(X_neg), c="red")
+
+        plt.tight_layout()
 
 
 class DetectorMixture(nn.Module):
@@ -97,6 +261,7 @@ class DetectorMixture(nn.Module):
         super().__init__()
         self.mixture = GaussianMixture(**kwargs)
         self.threshold = nn.Parameter(torch.tensor(torch.nan), requires_grad=False)
+        self.center = None
 
     def get_extra_state(self):
         return (self.mixture.get_params(), self.mixture.model_.state_dict())
@@ -113,60 +278,75 @@ class DetectorMixture(nn.Module):
         """Density of learned distribution at each point (ignoring which component it's from)"""
         return torch.exp(-self.mixture.score_samples(points).flatten())
 
-    def fit(self, train_points):
-        self.fit_predict(train_points)
+    def fit(self, X_train):
+        self.fit_predict(X_train)
         return self
 
-    def fit_predict(self, train_points):
-        self.mixture.fit(train_points)
-        densities = self.densities(train_points)
-        self.threshold = nn.Parameter(densities.min(), requires_grad=False)
+    def fit_predict(self, X_train):
+        self.mixture.fit(X_train)
+        densities = self.densities(X_train)
+        self.threshold.copy_(densities.min())
+        # There doesn't seem to be a nice way to get the means
+        self.center = mixture.model_.means
         return densities - self.threshold
 
 
 if __name__ == "__main__":
     device = "cuda"
-    train_points, val_points, val_targets = data2d.hollow(5000, 5000, device, 100)
-    whiten = train.Whiten(train_points[0]).fit(train_points)
-    train_points, val_points = whiten(train_points), whiten(val_points)
-    val_targets = val_targets.detach().cpu()
+    X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.hollow(5000, 5000, device)
 
     n_runs = 1
     balanced_accs = torch.zeros(n_runs)
     for i_run in range(n_runs):
         print(f"-------------------------------- Run {i_run} --------------------------------")
-        detector = DetectorMixture(
-            num_components=min(300, 2 + len(train_points) // 25),
-            covariance_type="spherical",
-            init_strategy="kmeans",
-            batch_size=10000,
-        ).fit(train_points)
-        val_outputs = detector(val_points)
-        balanced_accs[i_run] = eval.bin_acc(val_outputs, val_targets)[1]
+        n_centers = 2 + len(X_train_pos) // 28
+        start = time.time()
+        # detector = DetectorMixture(
+        #     num_components=n_centers,
+        #     covariance_type="spherical",
+        #     init_strategy="kmeans",
+        #     batch_size=10000,
+        # ).fit(X_train_pos)
+        detector = DetectorKe(
+            X_train_pos[0],
+            n_centers,
+            equal_clusters=True,
+            full_cov=False
+        ).fit(X_train_pos, X_train_neg, X_val_pos, X_val_neg, n_epochs=0, sparsity=0, plot=False)
+        print("fit time:", time.time() - start)
+        outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
+        acc_on_pos, acc_on_neg = acc(outputs_pos > 0), acc(outputs_neg <= 0)
+        balanced_accs[i_run] = 0.5 * (acc_on_pos + acc_on_neg)
 
-    print(f"Balanced validation accuracy: {100*balanced_accs.mean()} +- {300*balanced_accs.std()}")
+    print("Expecting equal clusters:", model.__dict__.get("equal_clusters", "pycave"))
+    print(
+        "Balanced validation accuracy:",
+        f"{percent(balanced_accs.mean())} +- {percent(3. * balanced_accs.std())}"
+    )
 
     # More detailed results from the last run
-    print(f"Number of positive training points: {len(train_points)}")
-    print("Density threshold:", detector.threshold)
-    # data2d.scatter_outputs_targets(
-    #     train_points,
-    #     detector(train_points),
-    #     torch.ones(len(train_points), dtype=torch.bool),
-    #     "Training data",
-    #     # There doesn't seem to be a nice way to get the means
-    #     centers=detector.mixture.model_.means,
-    # )
-    # data2d.scatter_outputs_targets(
-    #     val_points,
-    #     val_outputs,
-    #     val_targets,
-    #     "pycave GMM validation",
-    #     centers=detector.mixture.model_.means,
-    # )
+    print("True positive rate, true negative rate:", percent(acc_on_pos), percent(acc_on_neg))
+    print(f"Number of positive training points: {len(X_train_pos)}")
+    print("Likelihood threshold:", detector.threshold)
+    data2d.scatter_outputs_y(
+        X_train_pos,
+        detector(X_train_pos),
+        X_train_neg,
+        detector(X_train_neg),
+        f"{str(type(detector))} training",
+        centers=detector.center,
+    )
+    data2d.scatter_outputs_y(
+        X_val_pos,
+        outputs_pos,
+        X_val_neg,
+        outputs_neg,
+        f"{str(type(detector))} validation",
+        centers=detector.center,
+    )
     # eval.plot_distr_overlap(
-    #     val_outputs[val_targets],
-    #     val_outputs[~val_targets],
+    #     val_outputs[y_val],
+    #     val_outputs[~y_val],
     #     "Validation positive",
     #     "negative point thresholded densities",
     # )
