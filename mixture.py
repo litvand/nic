@@ -58,7 +58,6 @@ n_centers: 1849
 fit time: 1.6404266357421875
 Balanced validation accuracy: 71.09% +- nan%
 True positive rate, true negative rate: 99.99% 42.2%
-
 """
 
 
@@ -382,7 +381,7 @@ class DetectorKmeans(nn.Module):
     def forward(self, X):
         return self.density(X) - self.threshold
     
-    def fit(self, X_train_pos, X_val_pos=None, X_val_neg=None, n_retries=4):
+    def fit(self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, n_retries=4):
         """Retries only if validation data is available"""
 
         params = None
@@ -393,11 +392,15 @@ class DetectorKmeans(nn.Module):
                 kmeans_(self.center, X_train_pos)
                 cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
                 
-                self.threshold.copy_(self.density(X_train_pos).min())
-                # Surprisingly bad, even when negative training points are available:
-                # self.threshold.copy_(
-                #     0.5 * (self.density(X_train_pos).min() + self.density(X_train_neg).max())
-                # )
+                if X_train_neg is not None:
+                    # The arithmetic mean `(a+b)/2` and geometric mean `sqrt(a*b)` give surprisingly
+                    # bad results, but the reciprocal mean `2 / (1/a + 1/b)` works; maybe because
+                    # it's the arithmetic mean of square distances.
+                    self.threshold.copy_(2. / (
+                        1. / self.density(X_train_pos).min() + 1. / self.density(X_train_neg).max()
+                    ))
+                else:
+                    self.threshold.copy_(self.density(X_train_pos).min())
 
                 if n_retries > 1 and X_val_pos is not None and X_val_neg is not None:
                     pos_acc = acc(self.density(X_val_pos) > self.threshold)
@@ -415,13 +418,13 @@ if __name__ == "__main__":
     device = "cuda"
     fns = [data2d.hollow]  # , data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 5
+    n_runs = 4
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device, 100)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device, 2)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
@@ -445,7 +448,9 @@ if __name__ == "__main__":
         #     equal_clusters=True,
         #     full_cov=False
         # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
-        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(X_train_pos, X_val_pos, X_val_neg)
+        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(
+            X_train_pos, X_train_neg, X_val_pos, X_val_neg
+        )
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)

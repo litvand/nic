@@ -15,7 +15,11 @@ def pairwise_sqr_dists(X, centers):
 
 
 def kmeans_farthest_(centers, X_train):
-    """Initialize kmeans centers by choosing the farthest point from existing centers"""
+    """
+    Initialize kmeans centers by choosing the farthest point from existing centers.
+    
+    Overwrites centers
+    """
 
     centers[0] = X_train[0]
 
@@ -33,8 +37,12 @@ def kmeans_farthest_(centers, X_train):
 
 
 def kmeans_plusplus_(centers, X_train):
-    """Initialize kmeans centers by choosing points with probability proportional to their distance
-    from existing centers"""
+    """
+    Initialize kmeans centers by choosing points with probability proportional to their distance
+    from existing centers.
+    
+    Overwrites centers
+    """
 
     centers[0] = X_train[0]
 
@@ -59,7 +67,7 @@ def kmeans_lloyd_(centers, X_train, accuracy):
     """
     Implements Lloyd's algorithm for the Euclidean metric.
     
-    Centers will be overwritten.
+    Assumes centers are already initialized and modifies them.
     """
 
     assert 0 <= accuracy <= 1, accuracy
@@ -101,8 +109,8 @@ def kmeans_(centers, X_train, accuracy=0.9999):
     X_train: Training points (n_points, n_features)
     """
 
-    j_centers = torch.randperm(len(X_train), device=X_train.device)[:len(centers)]
-    torch.index_select(X_train, 0, j_centers, out=centers)
+    i_centers = torch.randperm(len(X_train), device=X_train.device)[:len(centers)]
+    torch.index_select(X_train, 0, i_centers, out=centers)
     kmeans_lloyd_(centers, X_train, accuracy)
 
 
