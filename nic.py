@@ -194,10 +194,11 @@ if __name__ == "__main__":
     print("model")
     trained_model = classifier.FullyConnected(train_inputs[0]).to(device)
     train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
+    trained_model.eval()
 
     print("detector")
     with torch.no_grad():
-        train_inputs = trained_model.activations(train_inputs)[0].flatten(1)
+        train_inputs = trained_model.activations(train_inputs)[1].flatten(1)
         whiten = Whiten(train_inputs[0]).fit(train_inputs)
         print(list(whiten.named_parameters()))
         train_inputs = whiten(train_inputs)
@@ -208,10 +209,10 @@ if __name__ == "__main__":
     val_inputs_neg = data[1][0].clone()
     adversary.fgsm_(val_inputs_neg, data[1][1], trained_model, 0.2)
     with torch.no_grad():
-        val_outputs_pos = detector(whiten(trained_model.activations(data[1][0])[0].flatten(1)))
-        val_outputs_neg = detector(whiten(trained_model.activations(val_inputs_neg)[0].flatten(1)))
+        val_outputs_pos = detector(whiten(trained_model.activations(data[1][0])[1].flatten(1)))
+        val_outputs_neg = detector(whiten(trained_model.activations(val_inputs_neg)[1].flatten(1)))
     print("val acc", acc(val_outputs_pos > 0), acc(val_outputs_neg <= 0))
-    train.save(nn.Sequential(whiten, detector), f"acti0-{len(detector.center)}means-onfc20k")
+    train.save(nn.Sequential(whiten, detector), f"acti1-{len(detector.center)}means-onfc20k")
 
     # print("nic")
     # nic = NIC(

@@ -77,14 +77,16 @@ if __name__ == "__main__":
 
     trained_model = classifier.FullyConnected(example_img).to(device)
     train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
+    trained_model.eval()
 
     # detector = DetectorNet(example_img).to(device)  # .fit(data, trained_model, eps=0.2)
     # train.save(detector, "detector-net20k")
     # train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5")
 
-    example = trained_model.activations(example_img[:1])[0].flatten(1)[0]
+    with torch.no_grad():
+        example = trained_model.activations(example_img[:1])[1].flatten(1)[0]
     detector = nn.Sequential(Whiten(example), DetectorKmeans(example, 202)).to(device)
-    train.load(detector, "acti0-202means-onfc20k-21411e50624e328209c7518986cb33cdb1d6ec1e")
+    train.load(detector, "acti0-202means-onfc20k-197269b81459b993db7ef89c7c8a55c104db3af0")
 
     # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
@@ -92,8 +94,8 @@ if __name__ == "__main__":
     )
     with torch.no_grad():
         detector.eval()
-        val_outputs = detector(trained_model.activations(detector_val_imgs)[0].flatten(1))
-        thresholds = [i / 10 for i in range(-5, 6)]
+        val_outputs = detector(trained_model.activations(detector_val_imgs)[1].flatten(1))
+        thresholds = [i / 10 for i in range(-5, 7)]
         for t in thresholds:
             eval.print_bin_acc(
                 val_outputs - t, detector_val_targets == 1, f"Threshold {t}"
