@@ -18,6 +18,50 @@ from cluster import cluster_var_pr_, kmeans
 from eval import acc, percent
 
 
+"""
+DetectorMixture is too slow with a large amount of data and isn't significantly more accurate than
+DetectorKmeans. Fitting `data2d.hollow` with 100 features takes 8 seconds with 5k training points
+and 300 seconds with 50k training points. DetectorMixture gets accuracy ~71.5% and DetectorKmeans
+can get 71% with a few retries (retries which we can afford to do, because DetectorKmeans is
+several orders of magnitude faster than DetectorMixture).
+
+-------------------------------- Run 0 --------------------------------
+len X_train_pos, X_train_neg, X_val_pos, X_val_neg: 4594 406 4642 358
+n_centers: 185
+Fitting K-means estimator...
+Running initialization...
+Epoch 368: 100%|
+...
+fit time: 8.077536821365356
+Predicting: 100%|
+...
+Balanced validation accuracy: 71.28% +- nan%
+True positive rate, true negative rate: 97.03% 45.53%
+
+-------------------------------- Run 0 --------------------------------
+len X_train_pos, X_train_neg, X_val_pos, X_val_neg: 46059 3941 46225 3775
+n_centers: 1844
+Fitting K-means estimator...
+Running initialization...
+Epoch 3686: 100%|
+...
+fit time: 306.76016759872437
+Predicting: 100%|
+...
+Balanced validation accuracy: 71.67% +- nan%
+True positive rate, true negative rate: 98.81% 44.53%
+
+-------------------------------- Run 0 --------------------------------
+len X_train_pos, X_train_neg, X_val_pos, X_val_neg: 46185 3815 46083 3917
+n_centers: 1849
+/home/mets/Code/nic/cluster.py:80: UserWarning: scatter_reduce()...
+fit time: 1.6404266357421875
+Balanced validation accuracy: 71.09% +- nan%
+True positive rate, true negative rate: 99.99% 42.2%
+
+"""
+
+
 class DetectorKe(nn.Module):
     def __init__(self, x_example, n_centers, equal_clusters=True, full_cov=True):
         super().__init__()
@@ -274,24 +318,33 @@ class DetectorMixture(nn.Module):
         self.mixture.set_params(extra_state[0])
         self.mixture.model_.load_state_dict(extra_state[1])
 
-    def forward(self, X):
-        return self.log_likelihood(X) - self.threshold
+    def forward(self, X, batch_size):
+        return self.log_likelihood(X, batch_size) - self.threshold
 
-    def log_likelihood(self, X):
+    def log_likelihood(self, X, batch_size):
         """Likelihood of learned distribution at each point (ignoring which component it's from)"""
+        # TODO: pycave can only handle input lengths that are a multiple of batch_size
+        if len(X) > batch_size:
+            X = X[:batch_size * (len(X) // batch_size)]
         return -self.mixture.score_samples(X).flatten()
 
-    def fit(self, X_train):
-        self.fit_predict(X_train)
+    def fit(self, X_train, batch_size):
+        self.fit_predict(X_train, batch_size)
         return self
 
-    def fit_predict(self, X_train):
+    def fit_predict(self, X_train, batch_size):
+        if len(X_train) > batch_size:
+            X_train = X_train[:batch_size * (len(X_train) // batch_size)]
         self.mixture.fit(X_train)
-        log_likelihood = self.log_likelihood(X_train)
+        log_likelihood = self.log_likelihood(X_train, batch_size)
         self.threshold.copy_(log_likelihood.min())
         # There doesn't seem to be a nice way to get the means
         self.center = self.mixture.model_.means
         return log_likelihood - self.threshold
+
+
+def grad_params(model):
+    return [(n, p.data.detach().clone()) for (n, p) in model.named_parameters() if p.requires_grad]
 
 
 class DetectorKmeans(nn.Module):
@@ -300,40 +353,132 @@ class DetectorKmeans(nn.Module):
 
         n_features, dtype, device = len(x_example), x_example.dtype, x_example.device
         self.center = nn.Parameter(torch.empty(n_centers, n_features, dtype=dtype, device=device))
-        self.var = nn.Parameter(torch.empty(n_centers, dtype=dtype, device=device))
-        self.pr = nn.Parameter(torch.empty(n_centers, dtype=dtype, device=device))
+        self.var = nn.Parameter(
+            torch.empty(n_centers, dtype=dtype, device=device), requires_grad=False
+        )
+        self.pr = nn.Parameter(
+            torch.empty(n_centers, dtype=dtype, device=device), requires_grad=False
+        )
         self.threshold = nn.Parameter(
-            torch.empty(1, dtype=dtype, device=device),
-            requires_grad=False
+            torch.empty(1, dtype=dtype, device=device), requires_grad=False
         )
     
-    def density(self, X):
+    def density(self, X, pr=None):
+        if pr is None:
+            pr = self.pr
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
-        return (1. / (diff_ij**2).sum(2)) @ (self.pr * self.var)
+        return (1. / (diff_ij**2).sum(2)) @ (pr * self.var.abs())
 
     def forward(self, X):
-        return self.density(X) - self.threshold        
+        return self.density(X) - self.threshold
     
-    def fit(self, X_train_pos):
+    def net_density(self, X_pos, X_neg, pr=None):
+        """Net density, for maximizing balanced detection accuracy"""
+
+        density_pos, density_neg = self.density(X_pos, pr), self.density(X_neg, pr)
+        with torch.no_grad():
+            # For detection, it's important that `density_pos >= density_neg + margin` and
+            # `density_neg <= density_pos - margin`, so `density_pos > density_neg.max() + margin`
+            # is just as good as `density_pos = density_neg.max() + margin` and
+            # `density_neg < density_pos.min() - margin` is just as good as
+            # `density_neg = density_pos.min() - margin`.
+            edge_pos = density_pos.min() - 2.
+            edge_neg = density_neg.max() + 2.
+            low, high = min(edge_pos, edge_neg), max(edge_pos, edge_neg)
+        
+        s = 1e-9 + self.var.abs().sum()
+        return (density_pos.clamp(max=high).mean() - density_neg.clamp(min=low).mean()) / s
+
+    def descent(self, X_train_pos, X_train_neg, X_val_pos, X_val_neg, plot):
+        n_epochs = 0
+        val_interval = 5  # Validate/update min loss every this many epochs
+        sparsity = 0
+
+        with torch.no_grad():
+            min_loss = self.net_density(X_val_pos, X_val_neg)
+            min_state = grad_params(self)
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
+        if plot:
+            losses_train, losses_val = [], []
+
+        for epoch in range(n_epochs):
+            optimizer.zero_grad(set_to_none=True)
+            # pr = self.pr.abs()
+            # pr = pr / pr.sum()
+            reg = 0.  # sparsity * pr.sqrt().mean()
+            loss = reg - self.net_density(X_train_pos, X_train_neg, None)
+            loss.backward()
+            optimizer.step()
+            if plot:
+                losses_train.append(loss.item())
+
+            if epoch % val_interval == 0:
+                with torch.no_grad():
+                    # self.pr.abs_()
+                    # self.pr.div_(self.pr.sum())
+                    loss = -self.net_density(X_val_pos, X_val_neg).item()
+                    if plot:
+                        losses_val.append(loss)
+
+                    if loss <= min_loss:
+                        min_loss = loss
+                        min_state = grad_params(self)
+        
+        with torch.no_grad():
+            for name, param in min_state:
+                getattr(self, name).data = param
+
+        if plot:
+            losses_train = np.array(losses_train)
+            plt.figure()
+            plt.title("Epoch training loss")
+            plt.tight_layout()
+            plt.plot(losses_train)
+            min_epoch = losses_train.argmin()
+            print("Min training loss, epoch:", losses_train[min_epoch], min_epoch)
+
+            losses_val = np.array(losses_val)
+            plt.figure()
+            plt.title("Epoch validation loss")
+            plt.tight_layout()
+            plt.plot(np.arange(len(losses_val)) * val_interval, losses_val)
+            i_min = losses_val.argmin()
+            print("Min validation loss, epoch:", losses_val[i_min], i_min * val_interval)
+    
+    def fit(self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, plot=False):
         with torch.no_grad():
             self.center.copy_(kmeans(X_train_pos, len(self.center)))
             cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
-            self.threshold.copy_(self.density(X_train_pos).min())
         
+        if X_train_neg is not None:
+            self.descent(X_train_pos, X_train_neg, X_val_pos, X_val_neg, plot)
+            with torch.no_grad():
+                # self.pr.abs_()
+                # self.pr.div_(self.pr.sum())
+                self.var.abs_()
+                self.threshold.copy_(self.density(X_train_pos).min())
+                # self.threshold.copy_(
+                #     0.5 * (self.density(X_train_pos).min() + self.density(X_train_neg).max())
+                # )
+        else:
+            with torch.no_grad():
+                self.threshold.copy_(self.density(X_train_pos).min())
+
         return self
 
 
 if __name__ == "__main__":
     device = "cuda"
-    fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
+    fns = [data2d.hollow]  # , data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 12
+    n_runs = 1
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device, 2)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
@@ -343,19 +488,23 @@ if __name__ == "__main__":
         print(f"n_centers: {n_centers}")
         
         start = time.time()
+        batch_size = 1000
         # detector = DetectorMixture(
         #     num_components=n_centers,
         #     covariance_type="spherical",
         #     init_strategy="kmeans",
-        #     batch_size=10000,
-        # ).fit(X_train_pos)
+        #     batch_size=batch_size,
+        #     trainer_params={"gpus": 1}
+        # ).fit(X_train_pos, batch_size)
         # detector = DetectorKe(
         #     X_train_pos[0],
         #     n_centers,
         #     equal_clusters=True,
         #     full_cov=False
         # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
-        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(X_train_pos)
+        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(
+            X_train_pos, X_train_neg, X_val_pos, X_val_neg, plot=False
+        )
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
@@ -373,15 +522,15 @@ if __name__ == "__main__":
     )
 
     # More detailed results from the last run
-    # print("Likelihood threshold:", detector.threshold)
-    # data2d.scatter_outputs_y(
-    #     X_train_pos,
-    #     detector(X_train_pos),
-    #     X_train_neg,
-    #     detector(X_train_neg),
-    #     f"{type(detector).__name__} training",
-    #     centers=detector.center,
-    # )
+    print("Likelihood threshold:", detector.threshold)
+    data2d.scatter_outputs_y(
+        X_train_pos,
+        detector(X_train_pos),
+        X_train_neg,
+        detector(X_train_neg),
+        f"{type(detector).__name__} training",
+        centers=detector.center,
+    )
     # data2d.scatter_outputs_y(
     #     X_val_pos,
     #     outputs_pos,
