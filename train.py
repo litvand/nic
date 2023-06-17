@@ -33,7 +33,6 @@ def save(model, model_name):
 
 def load(model, filename):
     state_dict = torch.load(f"models/{filename}.pt")
-    print(state_dict)
     model.load_state_dict(state_dict)
 
 

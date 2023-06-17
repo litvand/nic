@@ -8,6 +8,8 @@ import classifier
 import eval
 import mnist
 import train
+from train import Whiten
+from mixture import DetectorKmeans
 
 
 def balanced_acc_threshold(train_outputs, is_positive_target):
@@ -81,8 +83,8 @@ if __name__ == "__main__":
     # train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5")
 
     example = example_img.flatten()
-    detector = nn.Sequential(Whiten(example), DetectorKmeans(example, 2)).to(device)
-    train.load(detector, "whiten-kmeans-onfc20k-45051a4c86950666a96d0c02812eae4fcbfcaaa2")
+    detector = nn.Sequential(Whiten(example), DetectorKmeans(example, 202)).to(device)
+    train.load(detector, "whiten-202means-onfc20k-32ca088d03b42f89d9e39da87a8da9e4bcbddbdb")
 
     # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
@@ -90,11 +92,11 @@ if __name__ == "__main__":
     )
     with torch.no_grad():
         detector.eval()
-        val_prs = detector.prs(detector_val_imgs)
-        thresholds = [detector.threshold.item()] + [i / 10 for i in range(1, 10)] + [0.99, 0.999]
-        for threshold in thresholds:
+        val_outputs = detector(detector_val_imgs)
+        thresholds = [i / 10 for i in range(-5, 6)]
+        for t in thresholds:
             eval.print_bin_acc(
-                val_prs - threshold, detector_val_targets == 1, f"Threshold {threshold}"
+                val_outputs - t, detector_val_targets == 1, f"Threshold {t}"
             )
 
     # eval.plot_distr_overlap(

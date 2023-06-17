@@ -210,7 +210,7 @@ if __name__ == "__main__":
         val_outputs_pos = detector(whiten(data[1][0].flatten(1)))
         val_outputs_neg = detector(whiten(val_inputs_neg.flatten(1)))
     print("val acc", acc(val_outputs_pos > 0), acc(val_outputs_neg <= 0))
-    train.save(nn.Sequential(whiten, detector), f"whiten-{len(detector.center)}-onfc20k")
+    train.save(nn.Sequential(whiten, detector), f"whiten-{len(detector.center)}means-onfc20k")
 
     # print("nic")
     # nic = NIC(
