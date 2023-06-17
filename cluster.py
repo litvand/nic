@@ -114,7 +114,7 @@ def kmeans_(centers, X_train, accuracy=0.9999):
     kmeans_lloyd_(centers, X_train, accuracy)
 
 
-def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-8):
+def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-4):
     """
     Overwrites `var` and `pr`
 

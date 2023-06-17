@@ -377,12 +377,22 @@ class DetectorKmeans(nn.Module):
     def density(self, X):
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
         return (1. / (diff_ij**2).sum(2)) @ (self.pr * self.var)
+        # Gaussian:
+        # n_centers = len(self.center)
+        # d_ij = -0.5 * ke.Vi(X).weightedsqdist(
+        #     ke.Vj(self.center.data), ke.LazyTensor(1. / self.var.view(1, n_centers, 1))
+        # )
+        # return d_ij.exp().matvec(self.pr).view(-1)
 
     def forward(self, X):
         return self.density(X) - self.threshold
     
     def fit(self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, n_retries=4):
-        """Retries only if validation data is available"""
+        """
+        It can be better to leave X_train_neg=None
+        
+        Retries only if validation data is available
+        """
 
         params = None
         best_acc = 0.
@@ -394,8 +404,8 @@ class DetectorKmeans(nn.Module):
                 
                 if X_train_neg is not None:
                     # The arithmetic mean `(a+b)/2` and geometric mean `sqrt(a*b)` give surprisingly
-                    # bad results, but the reciprocal mean `2 / (1/a + 1/b)` works; maybe because
-                    # it's the arithmetic mean of square distances.
+                    # bad results, but the reciprocal mean `2 / (1/a + 1/b)` is sometimes better;
+                    # maybe because it's the arithmetic mean of square distances.
                     self.threshold.copy_(2. / (
                         1. / self.density(X_train_pos).min() + 1. / self.density(X_train_neg).max()
                     ))
@@ -424,7 +434,7 @@ if __name__ == "__main__":
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device, 2)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device, 100)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
@@ -449,7 +459,7 @@ if __name__ == "__main__":
         #     full_cov=False
         # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
         detector = DetectorKmeans(X_train_pos[0], n_centers).fit(
-            X_train_pos, X_train_neg, X_val_pos, X_val_neg
+            X_train_pos, None, X_val_pos, X_val_neg
         )
         print("fit time:", time.time() - start)
 
