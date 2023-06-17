@@ -367,98 +367,16 @@ class DetectorKmeans(nn.Module):
     
     def density(self, X):
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
-        return (1. / (diff_ij**2).sum(2)) @ (self.pr * self.var.abs())
+        return (1. / (diff_ij**2).sum(2)) @ (self.pr * self.var)
 
     def forward(self, X):
         return self.density(X) - self.threshold
     
-    def net_density(self, X_pos, X_neg):
-        """Net density, for maximizing balanced detection accuracy"""
-
-        density_pos, density_neg = self.density(X_pos), self.density(X_neg)
-        return density_pos.mean()
-        with torch.no_grad():
-            # For detection, it's important that `density_pos >= density_neg + margin` and
-            # `density_neg <= density_pos - margin`, so `density_pos > density_neg.max() + margin`
-            # is just as good as `density_pos = density_neg.max() + margin` and
-            # `density_neg < density_pos.min() - margin` is just as good as
-            # `density_neg = density_pos.min() - margin`.
-            edge_pos = density_pos.min() - 1.
-            edge_neg = density_neg.max() + 1.
-            low, high = min(edge_pos, edge_neg), max(edge_pos, edge_neg)
-        
-        s = 1e-9 + self.var.abs().sum()
-        return (density_pos.clamp(max=high).mean() - density_neg.clamp(min=low).mean()) / s
-
-    def descent(self, X_train_pos, X_train_neg, X_val_pos, X_val_neg, n_epochs, plot):
-        # TODO: Surprisingly gradient descent doesn't even manage to fit the training data.
-
-        val_interval = 5  # Validate/update min loss every this many epochs
-        sparsity = 0
-
-        with torch.no_grad():
-            min_loss = -self.net_density(X_val_pos, X_val_neg)
-            min_state = grad_params(self)
-        
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
-        losses_train, losses_val = [], [min_loss.item()]
-
-        for epoch in range(n_epochs):
-            optimizer.zero_grad(set_to_none=True)
-            reg = 0.  # sparsity * pr.sqrt().mean()
-            loss = reg - self.net_density(X_train_pos, X_train_neg)
-            loss.backward()
-            optimizer.step()
-            losses_train.append(loss.item())
-
-            if epoch % val_interval == 0:
-                with torch.no_grad():
-                    loss = -self.net_density(X_val_pos, X_val_neg).item()
-                    losses_val.append(loss)
-                    if loss <= min_loss:
-                        min_loss = loss
-                        min_state = grad_params(self)
-        
-        with torch.no_grad():
-            for name, param in min_state:
-                getattr(self, name).data = param
-
-        if len(losses_train) > 0:
-            losses_train = np.array(losses_train)
-            min_epoch = losses_train.argmin()
-            print("Min training loss, epoch:", losses_train[min_epoch], min_epoch)
-
-        losses_val = np.array(losses_val)
-        i_min = losses_val.argmin()
-        print("Min validation loss, epoch:", losses_val[i_min], (i_min - 1) * val_interval)
-
-        if plot:
-            plt.figure()
-            plt.title("Epoch training loss")
-            plt.tight_layout()
-            plt.plot(losses_train)
-
-            plt.figure()
-            plt.title("Epoch validation loss")
-            plt.tight_layout()
-            plt.plot(np.arange(len(losses_val)) * val_interval, losses_val)
-    
-    def fit(
-        self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, n_epochs=0, plot=False
-    ):
+    def fit(self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None):
         with torch.no_grad():
             kmeans_(self.center, X_train_pos)
             cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
-            if n_epochs == 0:
-                self.threshold.copy_(self.density(X_train_pos).min())
-                return self
-        
-        self.descent(X_train_pos, X_train_neg, X_val_pos, X_val_neg, n_epochs, plot)
-        with torch.no_grad():
-            self.var.abs_()
-            self.threshold.copy_(
-                0.5 * (self.density(X_train_pos).min() + self.density(X_train_neg).max())
-            )
+            self.threshold.copy_(self.density(X_train_pos).min())
 
         return self
 
@@ -473,17 +391,17 @@ if __name__ == "__main__":
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device, 2)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device, 2)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
         )
         
-        n_centers = 2 + len(X_train_pos) // 100
+        n_centers = 2 + len(X_train_pos) // 25
         print(f"n_centers: {n_centers}")
         
         start = time.time()
-        batch_size = 1000
+        # batch_size = 1000
         # detector = DetectorMixture(
         #     num_components=n_centers,
         #     covariance_type="spherical",
