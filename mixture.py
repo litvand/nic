@@ -14,7 +14,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 
 import data2d
 import train
-from cluster import cluster_var_pr_, kmeans
+from cluster import cluster_var_pr_, kmeans_
 from eval import acc, percent
 
 
@@ -352,7 +352,9 @@ class DetectorKmeans(nn.Module):
         super().__init__()
 
         n_features, dtype, device = len(x_example), x_example.dtype, x_example.device
-        self.center = nn.Parameter(torch.empty(n_centers, n_features, dtype=dtype, device=device))
+        self.center = nn.Parameter(
+            torch.empty(n_centers, n_features, dtype=dtype, device=device), requires_grad=False
+        )
         self.var = nn.Parameter(
             torch.empty(n_centers, dtype=dtype, device=device), requires_grad=False
         )
@@ -363,64 +365,56 @@ class DetectorKmeans(nn.Module):
             torch.empty(1, dtype=dtype, device=device), requires_grad=False
         )
     
-    def density(self, X, pr=None):
-        if pr is None:
-            pr = self.pr
+    def density(self, X):
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
-        return (1. / (diff_ij**2).sum(2)) @ (pr * self.var.abs())
+        return (1. / (diff_ij**2).sum(2)) @ (self.pr * self.var.abs())
 
     def forward(self, X):
         return self.density(X) - self.threshold
     
-    def net_density(self, X_pos, X_neg, pr=None):
+    def net_density(self, X_pos, X_neg):
         """Net density, for maximizing balanced detection accuracy"""
 
-        density_pos, density_neg = self.density(X_pos, pr), self.density(X_neg, pr)
+        density_pos, density_neg = self.density(X_pos), self.density(X_neg)
+        return density_pos.mean()
         with torch.no_grad():
             # For detection, it's important that `density_pos >= density_neg + margin` and
             # `density_neg <= density_pos - margin`, so `density_pos > density_neg.max() + margin`
             # is just as good as `density_pos = density_neg.max() + margin` and
             # `density_neg < density_pos.min() - margin` is just as good as
             # `density_neg = density_pos.min() - margin`.
-            edge_pos = density_pos.min() - 2.
-            edge_neg = density_neg.max() + 2.
+            edge_pos = density_pos.min() - 1.
+            edge_neg = density_neg.max() + 1.
             low, high = min(edge_pos, edge_neg), max(edge_pos, edge_neg)
         
         s = 1e-9 + self.var.abs().sum()
         return (density_pos.clamp(max=high).mean() - density_neg.clamp(min=low).mean()) / s
 
-    def descent(self, X_train_pos, X_train_neg, X_val_pos, X_val_neg, plot):
-        n_epochs = 0
+    def descent(self, X_train_pos, X_train_neg, X_val_pos, X_val_neg, n_epochs, plot):
+        # TODO: Surprisingly gradient descent doesn't even manage to fit the training data.
+
         val_interval = 5  # Validate/update min loss every this many epochs
         sparsity = 0
 
         with torch.no_grad():
-            min_loss = self.net_density(X_val_pos, X_val_neg)
+            min_loss = -self.net_density(X_val_pos, X_val_neg)
             min_state = grad_params(self)
-
+        
         optimizer = torch.optim.Adam(self.parameters(), lr=0.1)
-        if plot:
-            losses_train, losses_val = [], []
+        losses_train, losses_val = [], [min_loss.item()]
 
         for epoch in range(n_epochs):
             optimizer.zero_grad(set_to_none=True)
-            # pr = self.pr.abs()
-            # pr = pr / pr.sum()
             reg = 0.  # sparsity * pr.sqrt().mean()
-            loss = reg - self.net_density(X_train_pos, X_train_neg, None)
+            loss = reg - self.net_density(X_train_pos, X_train_neg)
             loss.backward()
             optimizer.step()
-            if plot:
-                losses_train.append(loss.item())
+            losses_train.append(loss.item())
 
             if epoch % val_interval == 0:
                 with torch.no_grad():
-                    # self.pr.abs_()
-                    # self.pr.div_(self.pr.sum())
                     loss = -self.net_density(X_val_pos, X_val_neg).item()
-                    if plot:
-                        losses_val.append(loss)
-
+                    losses_val.append(loss)
                     if loss <= min_loss:
                         min_loss = loss
                         min_state = grad_params(self)
@@ -429,41 +423,42 @@ class DetectorKmeans(nn.Module):
             for name, param in min_state:
                 getattr(self, name).data = param
 
-        if plot:
+        if len(losses_train) > 0:
             losses_train = np.array(losses_train)
+            min_epoch = losses_train.argmin()
+            print("Min training loss, epoch:", losses_train[min_epoch], min_epoch)
+
+        losses_val = np.array(losses_val)
+        i_min = losses_val.argmin()
+        print("Min validation loss, epoch:", losses_val[i_min], (i_min - 1) * val_interval)
+
+        if plot:
             plt.figure()
             plt.title("Epoch training loss")
             plt.tight_layout()
             plt.plot(losses_train)
-            min_epoch = losses_train.argmin()
-            print("Min training loss, epoch:", losses_train[min_epoch], min_epoch)
 
-            losses_val = np.array(losses_val)
             plt.figure()
             plt.title("Epoch validation loss")
             plt.tight_layout()
             plt.plot(np.arange(len(losses_val)) * val_interval, losses_val)
-            i_min = losses_val.argmin()
-            print("Min validation loss, epoch:", losses_val[i_min], i_min * val_interval)
     
-    def fit(self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, plot=False):
+    def fit(
+        self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, n_epochs=0, plot=False
+    ):
         with torch.no_grad():
-            self.center.copy_(kmeans(X_train_pos, len(self.center)))
+            kmeans_(self.center, X_train_pos)
             cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
+            if n_epochs == 0:
+                self.threshold.copy_(self.density(X_train_pos).min())
+                return self
         
-        if X_train_neg is not None:
-            self.descent(X_train_pos, X_train_neg, X_val_pos, X_val_neg, plot)
-            with torch.no_grad():
-                # self.pr.abs_()
-                # self.pr.div_(self.pr.sum())
-                self.var.abs_()
-                self.threshold.copy_(self.density(X_train_pos).min())
-                # self.threshold.copy_(
-                #     0.5 * (self.density(X_train_pos).min() + self.density(X_train_neg).max())
-                # )
-        else:
-            with torch.no_grad():
-                self.threshold.copy_(self.density(X_train_pos).min())
+        self.descent(X_train_pos, X_train_neg, X_val_pos, X_val_neg, n_epochs, plot)
+        with torch.no_grad():
+            self.var.abs_()
+            self.threshold.copy_(
+                0.5 * (self.density(X_train_pos).min() + self.density(X_train_neg).max())
+            )
 
         return self
 
@@ -472,7 +467,7 @@ if __name__ == "__main__":
     device = "cuda"
     fns = [data2d.hollow]  # , data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 1
+    n_runs = 5
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
@@ -484,7 +479,7 @@ if __name__ == "__main__":
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
         )
         
-        n_centers = 2 + len(X_train_pos) // 25
+        n_centers = 2 + len(X_train_pos) // 100
         print(f"n_centers: {n_centers}")
         
         start = time.time()
@@ -502,9 +497,7 @@ if __name__ == "__main__":
         #     equal_clusters=True,
         #     full_cov=False
         # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
-        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(
-            X_train_pos, X_train_neg, X_val_pos, X_val_neg, plot=False
-        )
+        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(X_train_pos)
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
@@ -513,8 +506,8 @@ if __name__ == "__main__":
     print("Expecting equal clusters:", getattr(detector, "equal_clusters", None))
     balanced_accs = 0.5 * (accs_on_pos + accs_on_neg)
     print(
-        "Balanced validation accuracy:",
-        f"{percent(balanced_accs.mean())} +- {percent(3. * balanced_accs.std())}"
+        "Balanced validation accuracy; min, max:",
+        percent(balanced_accs.mean()), percent(balanced_accs.min()), percent(balanced_accs.max())
     )
     print(
         "True positive rate, true negative rate:",
@@ -522,15 +515,15 @@ if __name__ == "__main__":
     )
 
     # More detailed results from the last run
-    print("Likelihood threshold:", detector.threshold)
-    data2d.scatter_outputs_y(
-        X_train_pos,
-        detector(X_train_pos),
-        X_train_neg,
-        detector(X_train_neg),
-        f"{type(detector).__name__} training",
-        centers=detector.center,
-    )
+    # print("Likelihood threshold:", detector.threshold)
+    # data2d.scatter_outputs_y(
+    #     X_train_pos,
+    #     detector(X_train_pos),
+    #     X_train_neg,
+    #     detector(X_train_neg),
+    #     f"{type(detector).__name__} training",
+    #     centers=detector.center,
+    # )
     # data2d.scatter_outputs_y(
     #     X_val_pos,
     #     outputs_pos,
