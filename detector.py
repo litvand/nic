@@ -82,9 +82,9 @@ if __name__ == "__main__":
     # train.save(detector, "detector-net20k")
     # train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5")
 
-    example = example_img.flatten()
+    example = trained_model.activations(example_img[:1])[0].flatten(1)[0]
     detector = nn.Sequential(Whiten(example), DetectorKmeans(example, 202)).to(device)
-    train.load(detector, "whiten-202means-onfc20k-32ca088d03b42f89d9e39da87a8da9e4bcbddbdb")
+    train.load(detector, "acti0-202means-onfc20k-21411e50624e328209c7518986cb33cdb1d6ec1e")
 
     # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     )
     with torch.no_grad():
         detector.eval()
-        val_outputs = detector(detector_val_imgs)
+        val_outputs = detector(trained_model.activations(detector_val_imgs)[0].flatten(1))
         thresholds = [i / 10 for i in range(-5, 6)]
         for t in thresholds:
             eval.print_bin_acc(
