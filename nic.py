@@ -3,11 +3,11 @@ from torch import nn
 
 import adversary
 import classifier
-import eval
 import mnist
 import train
-from mixture import DetectorMixture
-from train import Normalize
+from eval import acc
+from mixture import DetectorKmeans
+from train import Normalize, Whiten
 
 
 class ZipN(nn.Module):
@@ -54,23 +54,35 @@ def cat_features(features):
 
 
 class NIC(nn.Module):
-    def __init__(self, example_img, trained_model):
+    def __init__(self, example_img, trained_model, n_centers):
         super().__init__()
+
+        dtype, device = example_img.dtype, example_img.device
 
         trained_model.eval()
         with torch.no_grad():
             imgs = example_img.unsqueeze(0)
             layers = [imgs] + trained_model.activations(imgs)
+            layers = [l.flatten(1) for l in layers]
             n_classes = layers[-1].size(1)  # Last layer's number of features
 
-        self.whitening = ZipN([Normalize(a[0]) for a in layers])
-        self.value_detectors = ZipN([DetectorMixture()])
-        self.layer_classifiers = ZipN([nn.Linear(a.size(1), n_classes) for a in layers[:-2]])
-        self.prov_detectors = ZipN([DetectorMixture() for _ in self.layer_classifiers])
-        self.final_whiten = Normalize(
-            torch.zeros(len(self.value_detectors) + len(self.prov_detectors))
+        self.whitening = ZipN([Whiten(a[0]) for a in layers])
+        
+        self.value_detectors = ZipN([DetectorKmeans(layers[-1][0], n_centers)])
+
+        self.layer_classifiers = ZipN([
+            nn.Linear(a.size(1), n_classes).to(device) for a in layers[:-2]
+        ])
+        self.prov_detectors = ZipN([
+            DetectorKmeans(layers[-1][0], n_centers) for _ in self.layer_classifiers
+        ])
+
+        densities = torch.empty(1, dtype=dtype, device=device).expand(
+            len(self.value_detectors) + len(self.prov_detectors)
         )
-        self.final_detector = DetectorMixture()
+        self.final_whiten = Whiten(densities)
+        self.final_detector = DetectorKmeans(densities, n_centers)
+        print("inited nic")
 
     def forward(self, batch, trained_model):
         """
@@ -109,46 +121,41 @@ class NIC(nn.Module):
         """
         (train_inputs, train_targets), (val_inputs, val_targets) = data
         trained_model.eval()
-
-        detector_args = {
-            "num_components": min(10, 2 + len(train_inputs) // 100),
-            "covariance_type": "spherical",
-            "init_strategy": "kmeans",
-            "batch_size": 5000,  # Largest size that fits in memory
-        }
+        n_centers = len(self.final_detector.center)
 
         with torch.no_grad():
             print("Whiten NIC layers")
             train_layers = [train_inputs] + trained_model.activations(train_inputs)
-            self.whitening = ZipN([Normalize(layer[0]).fit(layer) for layer in train_layers])
-            train_layers = self.whitening(layer.flatten(1) for layer in train_layers)
-            cat_layer_pairs(train_layers)
+            train_layers = [layer.flatten(1) for layer in train_layers]
+            print("train_layers", train_layers)
+            for whiten, layer in zip(self.whitening, train_layers):
+                whiten.fit(layer)
+            train_layers = self.whitening(train_layers)
+
             val_layers = get_whitened_layers(self.whitening, trained_model, val_inputs)
 
-        print("train_layers", train_layers)
-
-        self.value_detectors, train_value_densities = train_layer_detectors(
-            train_layers[-1:], detector_args, "Value"
+        train_value_densities = train_layer_detectors(
+            self.value_detectors, train_layers[-1:], "Value"
         )
 
-        self.layer_classifiers, train_logits = train_layer_classifiers(
-            train_layers, train_targets, val_layers, val_targets, n_classes=train_layers[-1].size(1)
+        train_logits = train_layer_classifiers(
+            self.layer_classifiers, train_layers, train_targets, val_layers, val_targets
         )
-        self.prov_detectors, train_prov_densities = train_layer_detectors(
-            cat_layer_pairs(train_logits), detector_args, "Provenance"
+        train_prov_densities = train_layer_detectors(
+            self.prov_detectors, cat_layer_pairs(train_logits), "Provenance"
         )
 
         print("Final whiten")
         with torch.no_grad():
             train_densities = cat_features(train_value_densities + train_prov_densities)
-            self.final_whiten = Normalize(train_densities[0]).fit(train_densities)
+            self.final_whiten = Whiten(train_densities[0]).fit(train_densities)
             train_densities = self.final_whiten(train_densities)
 
-        self.final_detector = DetectorMixture(**detector_args).fit(train_densities)
+        self.final_detector = DetectorKmeans(train_densities[0], n_centers).fit(train_densities)
         return self
 
 
-def train_layer_classifiers(train_layers, train_targets, val_layers, val_targets, n_classes):
+def train_layer_classifiers(classifiers, train_layers, train_targets, val_layers, val_targets):
     # The last layer of `train_layers` already contains logits, and the next-to-last layer is
     # just a linear transformation of the last layer, so exclude the last two layers.
     train_logits, classifiers = [], []
@@ -167,35 +174,56 @@ def train_layer_classifiers(train_layers, train_targets, val_layers, val_targets
     return classifiers, train_logits
 
 
-def train_layer_detectors(train_layers, detector_args, detector_name):
-    train_densities, detectors = [], []
+def train_layer_detectors(detectors, train_layers, detector_name):
+    train_densities = []
     for i_layer, train_layer in enumerate(train_layers):
         print(f"--- {detector_name} detector {i_layer}/{len(train_layers)} ---")
-        detector = DetectorMixture(**detector_args)
-
-        train_densities.append(detector.fit_predict(train_layer))
-        detectors.append(detector)
-
-    detectors = ZipN(detectors)
-    return detectors, train_densities
+        train_densities.append(detectors[i_layer].fit_predict(train_layer))
+    
+    return train_densities
 
 
 if __name__ == "__main__":
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    data = mnist.load_data(n_train=20000, n_val=2000, device=device)
+    print("data")
+    data = mnist.load_data(n_train=20000, n_val=8000, device=device)
+    train_inputs = data[0][0]
 
-    trained_model = classifier.FullyConnected(data[0][0][0]).to(device)
+    print("model")
+    trained_model = classifier.FullyConnected(train_inputs[0]).to(device)
     train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
 
-    nic = NIC(data[0][0][0], trained_model).to(device)  # .fit(data, trained_model)
-    # train.save(nic, "nic-onfc20k")
-    train.load(nic, "nic-onfc20k-036721ae464e534d53585e0a62bf0ecc6c25405f")
-
-    detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
-        data[1][0], data[1][1], trained_model, 0.2
-    )
+    print("detector")
+    train_inputs = train_inputs.flatten(1)
+    whiten = Whiten(train_inputs[0]).fit(train_inputs)
+    print(list(whiten.named_parameters()))
+    train_inputs = whiten(train_inputs)
+    detector = DetectorKmeans(train_inputs[0], 2 + len(train_inputs) // 100)
+    train_outputs = detector.fit_predict(train_inputs)
+    
+    print("fgsm")
+    val_inputs_neg = data[1][0].clone()
+    adversary.fgsm_(val_inputs_neg, data[1][1], trained_model, 0.2)
     with torch.no_grad():
-        nic.eval()
-        eval.print_bin_acc(nic(detector_val_imgs, trained_model), detector_val_targets == 1, "NIC")
+        val_outputs_pos = detector(whiten(data[1][0].flatten(1)))
+        val_outputs_neg = detector(whiten(val_inputs_neg.flatten(1)))
+    print("val acc", acc(val_outputs_pos > 0), acc(val_outputs_neg <= 0))
+    train.save(nn.Sequential(whiten, detector), f"whiten-{len(detector.center)}-onfc20k")
+
+    # print("nic")
+    # nic = NIC(
+    #     train_inputs[0], trained_model, n_centers=2 + len(train_inputs) // 50
+    # ).fit(data, trained_model)
+    # train.save(nic, "nic-onfc20k")
+    # # train.load(nic, "nic-onfc20k-036721ae464e534d53585e0a62bf0ecc6c25405f")
+
+    # detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
+    #     data[1][0], data[1][1], trained_model, 0.2
+    # )
+    # with torch.no_grad():
+    #     nic.eval()
+    #     eval.print_bin_acc(
+    #         nic(detector_val_imgs, trained_model), detector_val_targets == 1, "NIC"
+    #     )

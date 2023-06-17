@@ -32,7 +32,9 @@ def save(model, model_name):
 
 
 def load(model, filename):
-    model.load_state_dict(torch.load(f"models/{filename}.pt"))
+    state_dict = torch.load(f"models/{filename}.pt")
+    print(state_dict)
+    model.load_state_dict(state_dict)
 
 
 def activations_at(sequential, X, module_indices):
@@ -101,7 +103,7 @@ class Whiten(nn.Module):
 
         cov = torch.cov((X_train - self.mean).T)
         eig_vals, eig_vecs = linalg.eigh(cov)
-        torch.mm(eig_vals.rsqrt_().diag(), eig_vecs.T, out=self.w)
+        torch.mm(eig_vals.clamp(min=1e-6).rsqrt_().diag(), eig_vecs.T, out=self.w)
         if zca:
             self.w.copy_(eig_vecs.mm(self.w))
 

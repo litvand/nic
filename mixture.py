@@ -387,7 +387,13 @@ class DetectorKmeans(nn.Module):
     def forward(self, X):
         return self.density(X) - self.threshold
     
-    def fit(self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, n_retries=4):
+    def fit(self, *args, **kwargs):
+        self.fit_predict(*args, **kwargs)
+        return self
+    
+    def fit_predict(
+        self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, n_retries=4
+    ):
         """
         It can be better to leave X_train_neg=None
         
@@ -397,17 +403,19 @@ class DetectorKmeans(nn.Module):
         params = None
         best_acc = 0.
 
+        outputs_train_pos = None
         with torch.no_grad():
             for _ in range(n_retries):
                 kmeans_(self.center, X_train_pos)
                 cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
                 
+                outputs_train_pos = self.density(X_train_pos)
                 if X_train_neg is not None:
                     # The arithmetic mean `(a+b)/2` and geometric mean `sqrt(a*b)` give surprisingly
                     # bad results, but the reciprocal mean `2 / (1/a + 1/b)` is sometimes better;
                     # maybe because it's the arithmetic mean of square distances.
                     self.threshold.copy_(2. / (
-                        1. / self.density(X_train_pos).min() + 1. / self.density(X_train_neg).max()
+                        1. / outputs_train_pos.min() + 1. / self.density(X_train_neg).max()
                     ))
                 else:
                     self.threshold.copy_(self.density(X_train_pos).min())
@@ -421,12 +429,14 @@ class DetectorKmeans(nn.Module):
                         best_acc = val_acc
         
         set_params(self, params)
-        return self
+        if params is not None:  
+            outputs_train_pos = self.density(X_train_pos)
+        return outputs_train_pos - self.threshold
 
 
 if __name__ == "__main__":
     device = "cuda"
-    fns = [data2d.hollow]  # , data2d.circles, data2d.triangle, data2d.line]
+    fns = [data2d.line]  # , data2d.circles, data2d.triangle, data2d.line]
 
     n_runs = 4
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
@@ -434,7 +444,7 @@ if __name__ == "__main__":
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device, 100)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
@@ -479,22 +489,22 @@ if __name__ == "__main__":
 
     # More detailed results from the last run
     # print("Likelihood threshold:", detector.threshold)
-    # data2d.scatter_outputs_y(
-    #     X_train_pos,
-    #     detector(X_train_pos),
-    #     X_train_neg,
-    #     detector(X_train_neg),
-    #     f"{type(detector).__name__} training",
-    #     centers=detector.center,
-    # )
-    # data2d.scatter_outputs_y(
-    #     X_val_pos,
-    #     outputs_pos,
-    #     X_val_neg,
-    #     outputs_neg,
-    #     f"{type(detector).__name__} validation",
-    #     centers=detector.center,
-    # )
+    data2d.scatter_outputs_y(
+        X_train_pos,
+        detector(X_train_pos),
+        X_train_neg,
+        detector(X_train_neg),
+        f"{type(detector).__name__} training",
+        centers=detector.center,
+    )
+    data2d.scatter_outputs_y(
+        X_val_pos,
+        outputs_pos,
+        X_val_neg,
+        outputs_neg,
+        f"{type(detector).__name__} validation",
+        centers=detector.center,
+    )
     # eval.plot_distr_overlap(
     #     val_outputs[y_val],
     #     val_outputs[~y_val],
