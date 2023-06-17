@@ -101,8 +101,8 @@ def kmeans_(centers, X_train, accuracy=0.9999):
     X_train: Training points (n_points, n_features)
     """
 
-    perm = torch.randperm(len(X_train), device=X_train.device)
-    torch.index_select(X_train, 0, perm[:len(centers)], out=centers)
+    j_centers = torch.randperm(len(X_train), device=X_train.device)[:len(centers)]
+    torch.index_select(X_train, 0, j_centers, out=centers)
     kmeans_lloyd_(centers, X_train, accuracy)
 
 

@@ -343,8 +343,18 @@ class DetectorMixture(nn.Module):
         return log_likelihood - self.threshold
 
 
+def all_params(model):
+    return [(n, p.data.detach().clone()) for (n, p) in model.named_parameters()]
+
+
 def grad_params(model):
     return [(n, p.data.detach().clone()) for (n, p) in model.named_parameters() if p.requires_grad]
+
+
+def set_params(model, params):
+    if params is not None:
+        for name, param in params:
+            getattr(model, name).data = param
 
 
 class DetectorKmeans(nn.Module):
@@ -372,12 +382,32 @@ class DetectorKmeans(nn.Module):
     def forward(self, X):
         return self.density(X) - self.threshold
     
-    def fit(self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None):
-        with torch.no_grad():
-            kmeans_(self.center, X_train_pos)
-            cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
-            self.threshold.copy_(self.density(X_train_pos).min())
+    def fit(self, X_train_pos, X_val_pos=None, X_val_neg=None, n_retries=4):
+        """Retries only if validation data is available"""
 
+        params = None
+        best_acc = 0.
+
+        with torch.no_grad():
+            for _ in range(n_retries):
+                kmeans_(self.center, X_train_pos)
+                cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
+                
+                self.threshold.copy_(self.density(X_train_pos).min())
+                # Surprisingly bad, even when negative training points are available:
+                # self.threshold.copy_(
+                #     0.5 * (self.density(X_train_pos).min() + self.density(X_train_neg).max())
+                # )
+
+                if n_retries > 1 and X_val_pos is not None and X_val_neg is not None:
+                    pos_acc = acc(self.density(X_val_pos) > self.threshold)
+                    neg_acc = acc(self.density(X_val_neg) <= self.threshold)
+                    val_acc = 0.5 * (pos_acc + neg_acc)
+                    if val_acc > best_acc:
+                        params = all_params(self)
+                        best_acc = val_acc
+        
+        set_params(self, params)
         return self
 
 
@@ -391,7 +421,7 @@ if __name__ == "__main__":
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device, 2)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device, 100)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
@@ -415,7 +445,7 @@ if __name__ == "__main__":
         #     equal_clusters=True,
         #     full_cov=False
         # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
-        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(X_train_pos)
+        detector = DetectorKmeans(X_train_pos[0], n_centers).fit(X_train_pos, X_val_pos, X_val_neg)
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
