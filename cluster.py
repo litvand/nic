@@ -59,8 +59,12 @@ def kmeans_plusplus(X_train, n_centers):
     return centers
 
 
-def kmeans_lloyd(X_train, centers, accuracy):
-    """Implements Lloyd's algorithm for the Euclidean metric."""
+def kmeans_lloyd_(centers, X_train, accuracy):
+    """
+    Implements Lloyd's algorithm for the Euclidean metric.
+    
+    Centers will be overwritten.
+    """
 
     assert 0 <= accuracy <= 1, accuracy
 
@@ -94,20 +98,15 @@ def kmeans_lloyd(X_train, centers, accuracy):
 
             avg_dist = new_avg_dist
 
-    return centers
 
-
-def kmeans(X_train, n_centers, accuracy=0.9999):
+def kmeans_(centers, X_train, accuracy=0.9999):
     """
-    X_train: Training points (size = n_points, n_features)
-    n_centers: Number of centers
-
-    Returns: Cluster centers (size = n_centers, n_features)
+    centers: Cluster centers (n_centers, n_features). Will be overwritten.
+    X_train: Training points (n_points, n_features)
     """
 
-    # centers = X_train[torch.randperm(len(X_train))[:n_centers]]
-    centers = kmeans_plusplus(X_train, n_centers)
-    return kmeans_lloyd(X_train, centers, accuracy)
+    centers.copy_(X_train[torch.randperm(len(X_train))[:len(centers)]])
+    kmeans_lloyd_(centers, X_train, accuracy)
 
 
 def cluster_var_pr_(var, pr, X_train, centers):
@@ -121,11 +120,12 @@ def cluster_var_pr_(var, pr, X_train, centers):
     """
 
     diff_ij = LazyTensor(X_train[:, None, :]) - LazyTensor(centers[None, :, :])
-    j_center_from_i = (diff_ij**2).sum(2).argmin(1).view(len(X_train))
+    dist_i, j_center_from_i = (diff_ij**2).sum(2).min_argmin(1)
+    dist_i, j_center_from_i = dist_i.view(len(X_train)), j_center_from_i.view(len(X_train))
     for j in range(len(centers)):
         X_center = X_train[j_center_from_i == j]
-        var[j] = 1e-8 if len(X_center) < 2 else X_center.var(0).sum()
-    pr.copy_(j_center_from_i.bincount(minlength=len(centers)) / float(len(X_train)))
+        var[j] = 1e-8 + (0. if len(X_center) < 2 else X_center.var(0).sum())
+    torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(X_train)), out=pr)
 
 
 def bench():
