@@ -242,7 +242,8 @@ class DetectorNIC(nn.Module):
         
         print(
             "NIC.fit value_detectors[0] var",
-            self.value_detectors[0]
+            self.value_detectors[0].var.min(),
+            self.value_detectors[0].var.max(),
         )
         print("NIC.fit densities[0]", densities[0], densities[0].max(), densities[0].min())
         with torch.no_grad():
@@ -280,7 +281,7 @@ if __name__ == "__main__":
         val_outputs_pos = detector(data[1][0], trained_model)
         val_outputs_neg = detector(val_inputs_neg, trained_model)
     print("val acc", acc(val_outputs_pos >= 0), acc(val_outputs_neg < 0))
-    # train.save(detector, f"nic{n_centers}-onfc20k")
+    train.save(detector, f"nic{n_centers}-onfc20k")
 
     # print("nic")
     # nic = NIC(

@@ -379,7 +379,7 @@ class DetectorKmeans(nn.Module):
         # Cauchy:
         # OPTIM: Cache std
         var = ke.LazyTensor(self.var[None, :, None])
-        return ((1. / ((diff_ij**2).sum(2))) * var) @ self.pr
+        return (1. / 1e-8 + (diff_ij**2).sum(2)) @ (self.var * self.pr)
         # Gaussian:
         # n_centers = len(self.center)
         # d_ij = -0.5 * ke.Vi(X).weightedsqdist(
@@ -441,7 +441,7 @@ if __name__ == "__main__":
     device = "cuda"
     fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 4
+    n_runs = 12
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
