@@ -7,7 +7,7 @@ import classifier
 import data2d
 import mnist
 import train
-from eval import acc
+from eval import acc, percent
 from mixture import DetectorKmeans
 from train import Normalize, Whiten
 
@@ -209,6 +209,7 @@ class DetectorNIC(nn.Module):
         for value_detector, layer in zip(self.value_detectors, layers):
             densities.append(value_detector(layer))
 
+        return densities[0]  # rm
         densities = self.final_whiten(densities[0].view(-1, 1))
         print("whitened densities", densities.max(), densities.mean(), densities.min())
 
@@ -238,7 +239,7 @@ class DetectorNIC(nn.Module):
         with torch.no_grad():
             # densities = cat_features(densities)
             print("final whiten")
-            self.final_whiten.fit(densities[0].view(-1, 1))   # rm
+            self.final_whiten.fit(densities[0].view(-1, 1), unit_range=True)   # rm
             densities = self.final_whiten(densities[0].view(-1, 1))   # rm
         
         print("final detector")
@@ -267,16 +268,24 @@ if __name__ == "__main__":
     val_inputs_neg = data[1][0].clone()
     adversary.fgsm_(val_inputs_neg, data[1][1], trained_model, 0.2)
     with torch.no_grad():
-        val_outputs_pos, densities_pos = detector(data[1][0], trained_model)
-        val_outputs_neg, densities_neg = detector(val_inputs_neg, trained_model)
-    print("val acc", acc(val_outputs_pos >= 0), acc(val_outputs_neg < 0))
+        val_outputs_pos = detector(data[1][0], trained_model)
+        val_outputs_neg = detector(val_inputs_neg, trained_model)
+    print(
+        "val outputs pos", val_outputs_pos.max(), val_outputs_pos.mean(), val_outputs_pos.min(),
+        "neg", val_outputs_neg.max(), val_outputs_neg.mean(), val_outputs_neg.min())
+    print(
+        "max, min neg < 0",
+        val_outputs_neg[val_outputs_neg < 0].max(),
+        val_outputs_neg[val_outputs_neg < 0].min()
+    )
+    print("val acc", percent(acc(val_outputs_pos >= 0)), percent(acc(val_outputs_neg < 0)))
     data2d.scatter_outputs_y(
-        densities_pos.expand(-1, 2),
+        val_outputs_pos.view(-1, 1).expand(-1, 2),
         val_outputs_pos,
-        densities_neg.expand(-1, 2),
+        val_outputs_neg.view(-1, 1).expand(-1, 2),
         val_outputs_neg,
         f"{type(detector).__name__} validation",
-        centers=detector.final_detector.center.expand(-1, 2)
+        # centers=detector.final_detector.center.expand(-1, 2)
     )
     plt.show()
     # train.save(detector, f"nic{n_centers}-onfc20k")

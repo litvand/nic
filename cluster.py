@@ -8,12 +8,6 @@ import data2d
 # With LazyTensor: 50 loops, best of 5: 5.53 msec per loop
 # Without LazyTensor: 10 loops, best of 5: 20.6 msec per loop
 
-
-def pairwise_sqr_dists(X, centers):
-    """Square L2 distance between each point and each center (dists[i_x, i_center])"""
-    return ((X[:, None, :] - centers[None, :, :]) ** 2).sum(-1)
-
-
 def kmeans_farthest_(centers, X_train):
     """
     Initialize kmeans centers by choosing the farthest point from existing centers.
@@ -114,18 +108,16 @@ def kmeans_(centers, X_train, accuracy=0.9999):
     kmeans_lloyd_(centers, X_train, accuracy)
 
 
-def cluster_var_pr_(var, pr, X_train, centers):
+def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-8):
     """
     Overwrites `var` and `pr`
 
     var: Variance for each cluster (n_centers)
-    pr: Weight proportional to probability of each cluster (n_centers)
+    pr: Probability of each cluster (n_centers)
     X_train: Training points (n_points, n_features)
     centers: Center of each cluster (n_centers, n_features)
+    min_var: Variance of a cluster with a single point
     """
-
-    # Variance of a cluster with a single point
-    min_var = 1e-8
 
     diff_ij = LazyTensor(X_train[:, None, :]) - LazyTensor(centers[None, :, :])
     dist_i, j_center_from_i = (diff_ij**2).sum(2).min_argmin(1)

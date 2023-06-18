@@ -377,11 +377,9 @@ class DetectorKmeans(nn.Module):
     def density(self, X):
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
 
-        # Cauchy:
-        # OPTIM
+        # Cauchy-like:
         # var = ke.LazyTensor(self.var[None, :, None])
-        # return (1. / (var + (diff_ij**2).sum(2))) @ (self.var * self.pr)
-        # return (1. / (std + (diff_ij**2).sum(2) / std)) @ self.pr
+        # return (1. / (var + (diff_ij**2).sum(2))) @ (self.var**2 * self.pr)
 
         # Gaussian:
         d_ij = -0.5 * ke.Vi(X).weightedsqdist(
@@ -441,15 +439,15 @@ class DetectorKmeans(nn.Module):
 
 if __name__ == "__main__":
     device = "cuda"
-    fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
+    fns = [data2d.spiral]  # data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 12
+    n_runs = 4
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)

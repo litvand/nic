@@ -10,25 +10,41 @@ from train import Whiten
 
 
 def preprocess(n_train, X, y):
+    perm = torch.randperm(len(X), device=X.device)
+    X, y = X[perm], y[perm]
     X_train, X_val, y_train, y_val = X[:n_train], X[n_train:], y[:n_train], y[n_train:]
 
     X_train_pos, X_train_neg = X_train[y_train], X_train[~y_train]
     X_val_pos, X_val_neg = X_val[y_val], X_val[~y_val]
 
-    max_len = 2 * len(X_train_pos)
+    X_train_neg, X_val_neg = X_train_neg[:len(X_train_pos)], X_val_neg[:len(X_val_pos)]
+
     whiten = Whiten(X_train_pos[0]).fit(X_train_pos, zca=True)
     return tuple(
-        None if len(X) == 0 else whiten(X[torch.randperm(len(X))[:max_len]])
-        for X in (X_train_pos, X_train_neg, X_val_pos, X_val_neg)
+        None if len(X) == 0 else whiten(X) for X in (X_train_pos, X_train_neg, X_val_pos, X_val_neg)
     )
+
+def point(n_train, n_val, device):
+    n = n_train + n_val
+
+    X = torch.zeros(n, device=device)
+    X[:n//2] = torch.linspace(0.01, 1, n//2, device=device)
+    X = X.view(-1, 1).expand(-1, 2).clone()
+    
+    y = torch.zeros(n, dtype=torch.bool, device=device)
+    y[:n//2].fill_(True)
+    return preprocess(n_train, X, y)
 
 
 def spiral(n_train, n_val, device):
     angle = torch.linspace(0, 2 * np.pi, n_train + n_val + 1, device=device)[:-1]
     X = torch.stack((0.5 + 0.4 * (angle / 7) * angle.cos(), 0.5 + 0.3 * angle.sin()), 1)
+    
     X.add_(torch.randn(X.shape, device=device), alpha=0.02)
     X = 3 * X[torch.randperm(len(X))]
+    
     y = torch.ones(len(X), dtype=torch.bool, device=X.device)
+    y[0], y[-1] = False, False
     return preprocess(n_train, X, y)
 
 
@@ -117,6 +133,7 @@ def scatter_outputs_y(X_pos, outputs_pos, X_neg, outputs_neg, model_name, center
     plt.scatter(X_pos_neg[:, 0], X_pos_neg[:, 1], marker="+", c="red")
     plt.scatter(X_neg_pos[:, 0], X_neg_pos[:, 1], marker="v", c="green")
     plt.scatter(X_neg_neg[:, 0], X_neg_neg[:, 1], marker="v", c="red")
+
     if centers is not None:
         centers = centers.detach().cpu().numpy()
         plt.scatter(centers[:, 0], centers[:, 1], marker=".", c="blue")
