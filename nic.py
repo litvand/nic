@@ -183,6 +183,66 @@ def train_layer_detectors(detectors, train_layers, detector_name):
     return train_densities
 
 
+class DetectorNIC(nn.Module):
+    def __init__(self, example_img, trained_model, n_centers):
+        super().__init__()
+        imgs = example_img.unsqueeze(0)
+        trained_model.eval()
+
+        with torch.no_grad():
+            layers = [imgs] + trained_model.activations(imgs)
+            layers = [l.flatten(1) for l in layers]
+            self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
+            self.value_detectors = nn.ModuleList([DetectorKmeans(l[0], n_centers) for l in layers])
+            density = torch.empty(
+                len(self.value_detectors), dtype=example_img.dtype, device=example_img.device
+            )
+            self.final_whiten = Normalize(density)
+            self.final_detector = DetectorKmeans(density, n_centers)
+    
+    def forward(self, inputs, trained_model):
+        trained_model.eval()
+
+        layers = [inputs] + trained_model.activations(inputs)
+        layers = [l.flatten(1) for l in layers]
+        print("whiten")
+        layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
+        
+        print("value detectors")
+        densities = []
+        for value_detector, layer in zip(self.value_detectors, layers):
+            densities.append(value_detector(layer))
+
+        print("final")
+        return self.final_detector(self.final_whiten(cat_features(densities)))
+
+    def fit(self, train_inputs, trained_model):
+        trained_model.eval()
+        
+        with torch.no_grad():
+            train_layers = [train_inputs] + trained_model.activations(train_inputs)
+            train_layers = [l.flatten(1) for l in train_layers]
+            print("whiten")
+            for whiten, layer in zip(self.whiten, train_layers):
+                whiten.fit(layer)
+            train_layers = [whiten(layer) for whiten, layer in zip(self.whiten, train_layers)]
+        
+        print("value detectors")
+        densities = []
+        for value_detector, layer in zip(self.value_detectors, train_layers):
+            densities.append(value_detector.fit_predict(layer))
+        
+        with torch.no_grad():
+            densities = cat_features(densities)
+            print("final whiten")
+            self.final_whiten.fit(densities)
+            densities = self.final_whiten(densities)
+        
+        print("final detector")
+        self.final_detector.fit(densities)
+        return self
+
+
 if __name__ == "__main__":
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -194,25 +254,20 @@ if __name__ == "__main__":
     print("model")
     trained_model = classifier.FullyConnected(train_inputs[0]).to(device)
     train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
-    trained_model.eval()
 
     print("detector")
-    with torch.no_grad():
-        train_inputs = trained_model.activations(train_inputs)[1].flatten(1)
-        whiten = Whiten(train_inputs[0]).fit(train_inputs)
-        print(list(whiten.named_parameters()))
-        train_inputs = whiten(train_inputs)
-    detector = DetectorKmeans(train_inputs[0], 2 + len(train_inputs) // 100)
-    train_outputs = detector.fit_predict(train_inputs)
+    n_centers = 2 + len(train_inputs) // 100
+    detector = DetectorNIC(train_inputs[0], trained_model, n_centers)
+    detector.fit(train_inputs, trained_model)
     
     print("fgsm")
     val_inputs_neg = data[1][0].clone()
     adversary.fgsm_(val_inputs_neg, data[1][1], trained_model, 0.2)
     with torch.no_grad():
-        val_outputs_pos = detector(whiten(trained_model.activations(data[1][0])[1].flatten(1)))
-        val_outputs_neg = detector(whiten(trained_model.activations(val_inputs_neg)[1].flatten(1)))
+        val_outputs_pos = detector(data[1][0], trained_model)
+        val_outputs_neg = detector(val_inputs_neg, trained_model)
     print("val acc", acc(val_outputs_pos > 0), acc(val_outputs_neg <= 0))
-    train.save(nn.Sequential(whiten, detector), f"acti1-{len(detector.center)}means-onfc20k")
+    train.save(detector, f"nic{n_centers}-onfc20k")
 
     # print("nic")
     # nic = NIC(

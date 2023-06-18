@@ -8,7 +8,7 @@ import classifier
 import eval
 import mnist
 import train
-from train import Whiten
+from train import Normalize, Whiten
 from mixture import DetectorKmeans
 
 
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         example = trained_model.activations(example_img[:1])[1].flatten(1)[0]
     detector = nn.Sequential(Whiten(example), DetectorKmeans(example, 202)).to(device)
-    train.load(detector, "acti0-202means-onfc20k-197269b81459b993db7ef89c7c8a55c104db3af0")
+    train.load(detector, "acti1-202means-onfc20k-6e57c66f3620c47d79d1021da07ad39b6e2ea8c1")
 
     # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
