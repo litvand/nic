@@ -376,16 +376,18 @@ class DetectorKmeans(nn.Module):
     
     def density(self, X):
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
+
         # Cauchy:
-        # OPTIM: Cache std
-        var = ke.LazyTensor(self.var[None, :, None])
-        return (1. / 1e-8 + (diff_ij**2).sum(2)) @ (self.var * self.pr)
+        # OPTIM
+        # var = ke.LazyTensor(self.var[None, :, None])
+        # return (1. / (var + (diff_ij**2).sum(2))) @ (self.var * self.pr)
+        # return (1. / (std + (diff_ij**2).sum(2) / std)) @ self.pr
+
         # Gaussian:
-        # n_centers = len(self.center)
-        # d_ij = -0.5 * ke.Vi(X).weightedsqdist(
-        #     ke.Vj(self.center.data), ke.LazyTensor(1. / self.var.view(1, n_centers, 1))
-        # )
-        # return d_ij.exp().matvec(self.pr).view(-1)
+        d_ij = -0.5 * ke.Vi(X).weightedsqdist(
+            ke.Vj(self.center.data), ke.LazyTensor(1. / self.var[None, :, None])
+        )
+        return d_ij.exp().matvec(self.pr).view(-1)
 
     def forward(self, X):
         return self.density(X) - self.threshold

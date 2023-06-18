@@ -125,7 +125,7 @@ def cluster_var_pr_(var, pr, X_train, centers):
     """
 
     # Variance of a cluster with a single point
-    min_var = 1e-6 / len(X_train)
+    min_var = 1e-8
 
     diff_ij = LazyTensor(X_train[:, None, :]) - LazyTensor(centers[None, :, :])
     dist_i, j_center_from_i = (diff_ij**2).sum(2).min_argmin(1)

@@ -72,7 +72,7 @@ if __name__ == "__main__":
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    data = mnist.load_data(n_train=20000, n_val=2000, device=device)
+    data = mnist.load_data(n_train=1, n_val=19999, device=device)
     example_img = data[0][0][0]
 
     trained_model = classifier.FullyConnected(example_img).to(device)
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     # train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5")
 
     detector = DetectorNIC(example_img, trained_model, 202).to(device)
-    train.load(detector, "nic202-onfc20k-9cbdb0083e87e8f1b46802d3630739a22fbd137d")
+    train.load(detector, "nic202-onfc20k-836e70c6cf928b7abc81c32d7856f906f39cccba")
 
     # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
@@ -93,7 +93,14 @@ if __name__ == "__main__":
     with torch.no_grad():
         detector.eval()
         val_outputs = detector(detector_val_imgs, trained_model)
-        print(detector_val_imgs.shape, val_outputs.shape)
+        print(
+            val_outputs.max(), val_outputs.mean(), val_outputs.min(),
+            "thresh", detector.final_detector.threshold,
+            "neg",
+            val_outputs[detector_val_targets != 1].max(),
+            val_outputs[detector_val_targets != 1].mean()
+        )
+
         thresholds = [i / 10 for i in range(-5, 7)]
         for t in thresholds:
             eval.print_bin_acc(

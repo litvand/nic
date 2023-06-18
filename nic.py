@@ -1,8 +1,10 @@
+import matplotlib.pyplot as plt
 import torch
 from torch import nn
 
 import adversary
 import classifier
+import data2d
 import mnist
 import train
 from eval import acc
@@ -207,11 +209,11 @@ class DetectorNIC(nn.Module):
         for value_detector, layer in zip(self.value_detectors, layers):
             densities.append(value_detector(layer))
 
-        print(densities[0][:50], densities[0][-50:])
-        print("whiten", densities[0].shape, list(self.final_whiten.named_parameters()))
-        return self.final_whiten(densities[0].view(-1, 1)).view(-1)   # rm
+        densities = self.final_whiten(densities[0].view(-1, 1))
+        print("whitened densities", densities.max(), densities.mean(), densities.min())
+
         print("final")
-        return self.final_detector(self.final_whiten(densities[0].view(-1, 1)))   # rm
+        return self.final_detector(densities), densities   # rm
 
     def fit(self, train_inputs, trained_model):
         """
@@ -227,25 +229,12 @@ class DetectorNIC(nn.Module):
             for whiten, layer in zip(self.whiten, train_layers):
                 whiten.fit(layer)
             train_layers = [whiten(layer) for whiten, layer in zip(self.whiten, train_layers)]
-        
-        print(
-            "NIC.fit train_layers[0]",
-            train_layers[0],
-            train_layers[0].max(),
-            train_layers[0].min()
-        )
-        
+
         print("value detectors")
         densities = []
         for value_detector, layer in zip(self.value_detectors, train_layers):
             densities.append(value_detector.fit_predict(layer))
-        
-        print(
-            "NIC.fit value_detectors[0] var",
-            self.value_detectors[0].var.min(),
-            self.value_detectors[0].var.max(),
-        )
-        print("NIC.fit densities[0]", densities[0], densities[0].max(), densities[0].min())
+
         with torch.no_grad():
             # densities = cat_features(densities)
             print("final whiten")
@@ -278,10 +267,19 @@ if __name__ == "__main__":
     val_inputs_neg = data[1][0].clone()
     adversary.fgsm_(val_inputs_neg, data[1][1], trained_model, 0.2)
     with torch.no_grad():
-        val_outputs_pos = detector(data[1][0], trained_model)
-        val_outputs_neg = detector(val_inputs_neg, trained_model)
+        val_outputs_pos, densities_pos = detector(data[1][0], trained_model)
+        val_outputs_neg, densities_neg = detector(val_inputs_neg, trained_model)
     print("val acc", acc(val_outputs_pos >= 0), acc(val_outputs_neg < 0))
-    train.save(detector, f"nic{n_centers}-onfc20k")
+    data2d.scatter_outputs_y(
+        densities_pos.expand(-1, 2),
+        val_outputs_pos,
+        densities_neg.expand(-1, 2),
+        val_outputs_neg,
+        f"{type(detector).__name__} validation",
+        centers=detector.final_detector.center.expand(-1, 2)
+    )
+    plt.show()
+    # train.save(detector, f"nic{n_centers}-onfc20k")
 
     # print("nic")
     # nic = NIC(
