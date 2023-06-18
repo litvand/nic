@@ -10,6 +10,7 @@ import mnist
 import train
 from train import Normalize, Whiten
 from mixture import DetectorKmeans
+from nic import DetectorNIC
 
 
 def balanced_acc_threshold(train_outputs, is_positive_target):
@@ -83,10 +84,8 @@ if __name__ == "__main__":
     # train.save(detector, "detector-net20k")
     # train.load(detector, "detector-net-offc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5")
 
-    with torch.no_grad():
-        example = trained_model.activations(example_img[:1])[1].flatten(1)[0]
-    detector = nn.Sequential(Whiten(example), DetectorKmeans(example, 202)).to(device)
-    train.load(detector, "acti1-202means-onfc20k-6e57c66f3620c47d79d1021da07ad39b6e2ea8c1")
+    detector = DetectorNIC(example_img, trained_model, 202).to(device)
+    train.load(detector, "nic202-onfc20k-9cbdb0083e87e8f1b46802d3630739a22fbd137d")
 
     # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
     detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
@@ -94,11 +93,12 @@ if __name__ == "__main__":
     )
     with torch.no_grad():
         detector.eval()
-        val_outputs = detector(trained_model.activations(detector_val_imgs)[1].flatten(1))
+        val_outputs = detector(detector_val_imgs, trained_model)
+        print(detector_val_imgs.shape, val_outputs.shape)
         thresholds = [i / 10 for i in range(-5, 7)]
         for t in thresholds:
             eval.print_bin_acc(
-                val_outputs - t, detector_val_targets == 1, f"Threshold {t}"
+                val_outputs + t, detector_val_targets == 1, f"Threshold {t}"
             )
 
     # eval.plot_distr_overlap(

@@ -85,15 +85,6 @@ class NIC(nn.Module):
         print("inited nic")
 
     def forward(self, batch, trained_model):
-        """
-        Higher output means a higher probability of the input image being within the training
-        distribution, i.e. non-adversarial.
-
-        trained_model: Model that is already trained to classify something. Should output logits for
-                       each class. NIC detects whether an input is an adversarial input for
-                       `trained_model`. Must have `activations` method that returns activations of
-                       last layer and optionally activations of some earlier layers.
-        """
 
         trained_model.eval()
         layers = get_whitened_layers(self.whitening, trained_model, batch)
@@ -110,15 +101,7 @@ class NIC(nn.Module):
         return self.final_detector(self.final_whiten(densities))
 
     def fit(self, data, trained_model):
-        """
-        data: ((training_inputs, training_targets), (validation_inputs, validation_targets))
-              Targets should be class indices.
 
-        trained_model: Model that is already trained to classify something. Should output logits for
-                       each class. NIC detects whether an input is an adversarial input for
-                       `trained_model`. Must have `activations` method that returns activations of
-                       last layer and optionally activations of some earlier layers.
-        """
         (train_inputs, train_targets), (val_inputs, val_targets) = data
         trained_model.eval()
         n_centers = len(self.final_detector.center)
@@ -184,6 +167,16 @@ def train_layer_detectors(detectors, train_layers, detector_name):
 
 
 class DetectorNIC(nn.Module):
+    """
+    Higher output means a higher probability of the input image being within the training
+    distribution, i.e. non-adversarial.
+
+    trained_model: Model that is already trained to classify something. Should output logits for
+                    each class. NIC detects whether an input is an adversarial input for
+                    `trained_model`. Must have `activations` method that returns activations of
+                    last layer and optionally activations of some earlier layers.
+    """
+
     def __init__(self, example_img, trained_model, n_centers):
         super().__init__()
         imgs = example_img.unsqueeze(0)
@@ -195,7 +188,7 @@ class DetectorNIC(nn.Module):
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
             self.value_detectors = nn.ModuleList([DetectorKmeans(l[0], n_centers) for l in layers])
             density = torch.empty(
-                len(self.value_detectors), dtype=example_img.dtype, device=example_img.device
+                1, dtype=example_img.dtype, device=example_img.device   # rm
             )
             self.final_whiten = Normalize(density)
             self.final_detector = DetectorKmeans(density, n_centers)
@@ -207,16 +200,24 @@ class DetectorNIC(nn.Module):
         layers = [l.flatten(1) for l in layers]
         print("whiten")
         layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
+        print([layer.shape for layer in layers])
         
         print("value detectors")
         densities = []
         for value_detector, layer in zip(self.value_detectors, layers):
             densities.append(value_detector(layer))
 
+        print(densities[0][:50], densities[0][-50:])
+        print("whiten", densities[0].shape, list(self.final_whiten.named_parameters()))
+        return self.final_whiten(densities[0].view(-1, 1)).view(-1)   # rm
         print("final")
-        return self.final_detector(self.final_whiten(cat_features(densities)))
+        return self.final_detector(self.final_whiten(densities[0].view(-1, 1)))   # rm
 
     def fit(self, train_inputs, trained_model):
+        """
+        data: ((training_inputs, training_targets), (validation_inputs, validation_targets))
+              Targets should be class indices.
+        """
         trained_model.eval()
         
         with torch.no_grad():
@@ -233,10 +234,10 @@ class DetectorNIC(nn.Module):
             densities.append(value_detector.fit_predict(layer))
         
         with torch.no_grad():
-            densities = cat_features(densities)
+            # densities = cat_features(densities)
             print("final whiten")
-            self.final_whiten.fit(densities)
-            densities = self.final_whiten(densities)
+            self.final_whiten.fit(densities[0].view(-1, 1))   # rm
+            densities = self.final_whiten(densities[0].view(-1, 1))   # rm
         
         print("final detector")
         self.final_detector.fit(densities)
