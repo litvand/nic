@@ -42,7 +42,7 @@ def bin_acc(outputs, targets):
     targets: Boolean tensor (n_outputs); target True <--> positive class.
     """
 
-    outputs = outputs > 0
+    outputs = outputs >= 0
     assert targets.dtype == torch.bool, targets.dtype
     acc_total = acc(outputs == targets)
     acc_on_pos, acc_on_neg = acc(outputs[targets]), acc(~outputs[~targets])

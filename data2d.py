@@ -86,10 +86,10 @@ def scatter_outputs_y(X_pos, outputs_pos, X_neg, outputs_neg, model_name, center
     outputs_pos = outputs_pos.detach().cpu().numpy()
     outputs_neg = outputs_neg.detach().cpu().numpy()
 
-    X_pos_pos = X_pos[outputs_pos > 0]   # true positive
-    X_pos_neg = X_pos[outputs_pos <= 0]  # false negative
-    X_neg_pos = X_neg[outputs_neg > 0]   # false positive
-    X_neg_neg = X_neg[outputs_neg <= 0]  # true negative
+    X_pos_pos = X_pos[outputs_pos >= 0]   # true positive
+    X_pos_neg = X_pos[outputs_pos < 0]  # false negative
+    X_neg_pos = X_neg[outputs_neg >= 0]   # false positive
+    X_neg_neg = X_neg[outputs_neg < 0]  # true negative
 
     # pos_pos_outputs = outputs[pos & pos_output]  # true positive
     # neg_pos_outputs = outputs[neg & pos_output]  # false positive

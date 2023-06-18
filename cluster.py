@@ -114,7 +114,7 @@ def kmeans_(centers, X_train, accuracy=0.9999):
     kmeans_lloyd_(centers, X_train, accuracy)
 
 
-def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-4):
+def cluster_var_pr_(var, pr, X_train, centers):
     """
     Overwrites `var` and `pr`
 
@@ -122,8 +122,10 @@ def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-4):
     pr: Weight proportional to probability of each cluster (n_centers)
     X_train: Training points (n_points, n_features)
     centers: Center of each cluster (n_centers, n_features)
-    min_var: Variance of a cluster with a single point
     """
+
+    # Variance of a cluster with a single point
+    min_var = 1e-6 / len(X_train)
 
     diff_ij = LazyTensor(X_train[:, None, :]) - LazyTensor(centers[None, :, :])
     dist_i, j_center_from_i = (diff_ij**2).sum(2).min_argmin(1)

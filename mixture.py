@@ -376,7 +376,10 @@ class DetectorKmeans(nn.Module):
     
     def density(self, X):
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
-        return (1. / (diff_ij**2).sum(2)) @ (self.pr * self.var)
+        # Cauchy:
+        # OPTIM: Cache std
+        var = ke.LazyTensor(self.var[None, :, None])
+        return ((1. / ((diff_ij**2).sum(2))) * var) @ self.pr
         # Gaussian:
         # n_centers = len(self.center)
         # d_ij = -0.5 * ke.Vi(X).weightedsqdist(
@@ -436,7 +439,7 @@ class DetectorKmeans(nn.Module):
 
 if __name__ == "__main__":
     device = "cuda"
-    fns = [data2d.line]  # , data2d.circles, data2d.triangle, data2d.line]
+    fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
 
     n_runs = 4
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
@@ -444,7 +447,7 @@ if __name__ == "__main__":
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
@@ -474,7 +477,7 @@ if __name__ == "__main__":
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
-        accs_on_pos[run], accs_on_neg[run] = acc(outputs_pos > 0), acc(outputs_neg <= 0)
+        accs_on_pos[run], accs_on_neg[run] = acc(outputs_pos >= 0), acc(outputs_neg < 0)
 
     print("Expecting equal clusters:", getattr(detector, "equal_clusters", None))
     balanced_accs = 0.5 * (accs_on_pos + accs_on_neg)

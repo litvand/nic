@@ -73,6 +73,7 @@ class Normalize(nn.Module):
             self.shift.copy_(X_train.mean(1))  # Mean of each channel
             self.inv_scale.copy_(1.0 / X_train.std(1))
 
+        print("Normalize.fit", X_train, X_train.max(), X_train.min(), self.shift, self.inv_scale)
         return self
 
     def forward(self, X):

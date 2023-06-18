@@ -228,11 +228,23 @@ class DetectorNIC(nn.Module):
                 whiten.fit(layer)
             train_layers = [whiten(layer) for whiten, layer in zip(self.whiten, train_layers)]
         
+        print(
+            "NIC.fit train_layers[0]",
+            train_layers[0],
+            train_layers[0].max(),
+            train_layers[0].min()
+        )
+        
         print("value detectors")
         densities = []
         for value_detector, layer in zip(self.value_detectors, train_layers):
             densities.append(value_detector.fit_predict(layer))
         
+        print(
+            "NIC.fit value_detectors[0] var",
+            self.value_detectors[0]
+        )
+        print("NIC.fit densities[0]", densities[0], densities[0].max(), densities[0].min())
         with torch.no_grad():
             # densities = cat_features(densities)
             print("final whiten")
@@ -267,8 +279,8 @@ if __name__ == "__main__":
     with torch.no_grad():
         val_outputs_pos = detector(data[1][0], trained_model)
         val_outputs_neg = detector(val_inputs_neg, trained_model)
-    print("val acc", acc(val_outputs_pos > 0), acc(val_outputs_neg <= 0))
-    train.save(detector, f"nic{n_centers}-onfc20k")
+    print("val acc", acc(val_outputs_pos >= 0), acc(val_outputs_neg < 0))
+    # train.save(detector, f"nic{n_centers}-onfc20k")
 
     # print("nic")
     # nic = NIC(

@@ -61,9 +61,8 @@ class DetectorNet(nn.Module):
         )
         train.logistic_regression(self.seq, detector_data, init=True)
         with torch.no_grad():
-            self.threshold = nn.Parameter(
-                balanced_acc_threshold(self.prs(detector_data[0][0]), detector_data[0][1] == 1),
-                requires_grad=False,
+            self.threshold.copy_(
+                balanced_acc_threshold(self.prs(detector_data[0][0]), detector_data[0][1] == 1)
             )
 
         return self
