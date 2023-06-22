@@ -116,7 +116,7 @@ class Whiten(nn.Module):
 _get_optimizer_warned = set()
 
 
-def get_optimizer(Optimizer, model, decay=[], no_decay=[], weight_decay=0, **kwargs):
+def get_optimizer(Optimizer, model, decay=[], no_decay=[], weight_decay=0., **kwargs):
     """
     Split parameters of `model` into those that will experience weight decay (weights) and those
     that won't (biases, normalization, embedding) and those that won't be updated at all. Inspired
