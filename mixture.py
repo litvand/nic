@@ -417,9 +417,10 @@ class DetectorKmeans(nn.Module):
                     # The arithmetic mean `(a+b)/2` and geometric mean `sqrt(a*b)` give surprisingly
                     # bad results, but the reciprocal mean `2 / (1/a + 1/b)` is sometimes better;
                     # maybe because it's the arithmetic mean of square distances.
-                    self.threshold.copy_(2. / (
-                        1. / outputs_train_pos.min() + 1. / self.density(X_train_neg).max()
-                    ))
+                    # self.threshold.copy_(2. / (
+                    #     1. / outputs_train_pos.min() + 1. / self.density(X_train_neg).max()
+                    # ))
+                    self.threshold.copy_(self.density(X_train_neg).max() + 1e-2 / len(X_train_neg))
                 else:
                     self.threshold.copy_(self.density(X_train_pos).min())
 
@@ -439,15 +440,15 @@ class DetectorKmeans(nn.Module):
 
 if __name__ == "__main__":
     device = "cuda"
-    fns = [data2d.spiral]  # data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
+    fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line, data2d.point]
 
-    n_runs = 4
+    n_runs = 10
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
 
         fn = fns[run % len(fns)]
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(5000, 5000, device)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
             len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
@@ -472,13 +473,15 @@ if __name__ == "__main__":
         #     full_cov=False
         # ).fit(X_train_pos, n_epochs=200, sparsity=0, plot=False)
         detector = DetectorKmeans(X_train_pos[0], n_centers).fit(
-            X_train_pos, None, X_val_pos, X_val_neg
+            X_train_pos, X_train_neg, X_val_pos, X_val_neg
         )
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(X_val_pos), detector(X_val_neg)
         accs_on_pos[run], accs_on_neg[run] = acc(outputs_pos >= 0), acc(outputs_neg < 0)
+        print(str(fn), percent(accs_on_pos[run]), percent(accs_on_neg[run]))
 
+    print("-------------------------------- Summary --------------------------------")
     print("Expecting equal clusters:", getattr(detector, "equal_clusters", None))
     balanced_accs = 0.5 * (accs_on_pos + accs_on_neg)
     print(
@@ -491,7 +494,7 @@ if __name__ == "__main__":
     )
 
     # More detailed results from the last run
-    # print("Likelihood threshold:", detector.threshold)
+    # print("Density threshold:", detector.threshold)
     data2d.scatter_outputs_y(
         X_train_pos,
         detector(X_train_pos),

@@ -70,10 +70,10 @@ def kmeans_lloyd_(centers, X_train, accuracy):
     center_j = LazyTensor(centers[None, :, :])
 
     avg_dist = torch.inf
-    for iter in range(1000):
+    for iteration in range(1000):
         # E step: assign points to the closest cluster
         dist_ij = x_i.sqdist(center_j)  # symbolic squared distances
-        if iter % 2 == 1:
+        if iteration % 2 == 1:
             dist_i, j_center_from_i = dist_ij.min_argmin(dim=1)
         else:
             j_center_from_i = dist_ij.argmin(dim=1)
@@ -87,7 +87,7 @@ def kmeans_lloyd_(centers, X_train, accuracy):
             include_self=False,
         )
 
-        if iter % 2 == 1:
+        if iteration % 2 == 1:
             new_avg_dist = dist_i.mean()
             # Average square distance should decrease by at least a factor of `accuracy`
             if new_avg_dist >= accuracy * avg_dist:
@@ -129,6 +129,17 @@ def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-8):
     var += min_var
     
     torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(X_train)), out=pr)
+
+
+def gaussian_kernel(X, center, var, weight):
+    """
+    X: (n_points, n_features)
+    center: (n_centers, n_features)
+    var: Variances (n_centers)
+    weight: Center weights (n_centers)
+    """
+
+    
 
 
 def bench():

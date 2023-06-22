@@ -32,7 +32,7 @@ def point(n_train, n_val, device):
     X = X.view(-1, 1).expand(-1, 2).clone()
     
     y = torch.zeros(n, dtype=torch.bool, device=device)
-    y[:n//2].fill_(True)
+    y[:n//2 + 1].fill_(True)
     return preprocess(n_train, X, y)
 
 
