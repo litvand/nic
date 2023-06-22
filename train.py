@@ -17,12 +17,13 @@ def git_commit():
     """Can look at exact parameters and data that a model was trained on using the commit."""
 
     repo = git.Repo()
-    if repo.active_branch.name == "main":  # Don't clutter the main branch.
+    if repo.active_branch.name == "main":
+        # Don't clutter the main branch.
         print("NOTE: No automated commit, because on main branch")
-        return
-
-    repo.git.add(".")
-    repo.git.commit("-m", "_Automated commit")
+    else:
+        repo.git.add(".")
+        repo.git.commit("-m", "_Automated commit")
+    
     return repo.head.object.hexsha
 
 
