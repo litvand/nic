@@ -24,8 +24,8 @@ class SVM(nn.Module):
     def forward(self, X):
         return self.linear(X).view(-1)
     
-    def fit(self, X_train_pos, X_train_neg, verbose=False, n_epochs=300, margin=0.1):
-        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=0.5)
+    def fit(self, X_train_pos, X_train_neg, verbose=False, n_epochs=300, margin=0.5):
+        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=0.1)
         min_loss = torch.inf
         min_state = None
 
@@ -109,7 +109,7 @@ class SVM(nn.Module):
 
 
 def show_results(X_pos, outputs_pos, X_neg, outputs_neg, *args):
-    data2d.scatter_outputs_y(X_pos, outputs_pos, X_neg, outputs_neg, *args)
+    # data2d.scatter_outputs_y(X_pos, outputs_pos, X_neg, outputs_neg, *args)
 
     acc_on_pos, acc_on_neg = acc(outputs_pos >= 0), acc(outputs_neg < 0)
     print("Balanced accuracy:", percent(0.5 * (acc_on_pos + acc_on_neg)))
@@ -117,30 +117,30 @@ def show_results(X_pos, outputs_pos, X_neg, outputs_neg, *args):
 
 
 if __name__ == "__main__":
-    for run in range(3):
+    for run in range(10):
         print(f"-------------------------- Run {run} --------------------------")
         device = "cuda"
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.point(5000, 5000, device)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.overlap(5000, 5000, device)
 
         torch_svm = SVM(X_train_pos[0])
         print("Training SVM")
-        torch_svm.fit_one_class(X_train_pos)
+        torch_svm.fit(X_train_pos, X_train_neg)
         print("Trained SVM")
         print(*torch_svm.named_parameters())
 
-        sk_svm = SGDOneClassSVM(nu=0.5)
-        if sk_svm is not None:
-            sk_svm.fit(X_train_pos.detach().cpu().numpy())
-            print("sk weights", sk_svm.coef_)
-            print("sk bias (== -offset)", -sk_svm.offset_)
+        # sk_svm = SGDOneClassSVM(nu=0.5)
+        # if sk_svm is not None:
+        #     sk_svm.fit(X_train_pos.detach().cpu().numpy())
+        #     print("sk weights", sk_svm.coef_)
+        #     print("sk bias (== -offset)", -sk_svm.offset_)
 
         with torch.no_grad():
             show_results(X_val_pos, torch_svm(X_val_pos), X_val_neg, torch_svm(X_val_neg), "torch")
-            show_results(
-                X_val_pos,
-                torch.tensor(sk_svm.predict(X_val_pos.detach().cpu().numpy())),
-                X_val_neg,
-                torch.tensor(sk_svm.predict(X_val_neg.detach().cpu().numpy())),
-                "sk",
-            )
+            # show_results(
+            #     X_val_pos,
+            #     torch.tensor(sk_svm.predict(X_val_pos.detach().cpu().numpy())),
+            #     X_val_neg,
+            #     torch.tensor(sk_svm.predict(X_val_neg.detach().cpu().numpy())),
+            #     "sk",
+            # )
             plt.show()

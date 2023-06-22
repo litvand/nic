@@ -25,6 +25,18 @@ def preprocess(n_train, X, y):
     )
 
 
+def overlap(n_train, n_val, device):
+    n = n_train + n_val
+    
+    X = torch.randn((n, 2), device=device)
+    X[:n//2] += 1.
+    
+    y = torch.zeros(n, dtype=torch.bool, device=device)
+    y[:n//2] = True
+
+    return preprocess(n_train, X, y)
+
+
 def point(n_train, n_val, device):
     n = n_train + n_val
 
