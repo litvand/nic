@@ -3,8 +3,8 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 import torch
 
-# from sklearn.svm import OneClassSVM
-from sklearn.linear_model import SGDOneClassSVM
+from sklearn.svm import SVC
+# from sklearn.linear_model import SGDOneClassSVM
 from torch import nn
 
 import data2d
@@ -24,8 +24,8 @@ class SVM(nn.Module):
     def forward(self, X):
         return self.linear(X).view(-1)
     
-    def fit(self, X_train_pos, X_train_neg, verbose=False, n_epochs=300, margin=0.5):
-        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=0.1)
+    def fit(self, X_train_pos, X_train_neg, verbose=False, n_epochs=300, margin=0.5, lr=0.1):
+        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=lr)
         min_loss = torch.inf
         min_state = None
 
@@ -117,30 +117,34 @@ def show_results(X_pos, outputs_pos, X_neg, outputs_neg, *args):
 
 
 if __name__ == "__main__":
-    for run in range(10):
+    for run in range(5):
         print(f"-------------------------- Run {run} --------------------------")
         device = "cuda"
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.overlap(5000, 5000, device)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.point(5000, 5000, device)
 
         torch_svm = SVM(X_train_pos[0])
         print("Training SVM")
-        torch_svm.fit(X_train_pos, X_train_neg)
+        torch_svm.fit(X_train_pos, X_train_neg, margin=0.1, lr=0.1, n_epochs=600)
         print("Trained SVM")
         print(*torch_svm.named_parameters())
 
         # sk_svm = SGDOneClassSVM(nu=0.5)
-        # if sk_svm is not None:
-        #     sk_svm.fit(X_train_pos.detach().cpu().numpy())
-        #     print("sk weights", sk_svm.coef_)
-        #     print("sk bias (== -offset)", -sk_svm.offset_)
+        sk_svm = SVC(kernel="linear")
+        if sk_svm is not None:
+            X_train = torch.cat((X_train_pos, X_train_neg), dim=0)
+            y_train = torch.zeros(len(X_train), dtype=torch.int32)
+            y_train[:len(X_train_pos)].fill_(1)
+            sk_svm.fit(X_train.cpu().numpy(), y_train.numpy())
+            # print("sk weights", sk_svm.coef_)
+            # print("sk bias (== -offset)", -sk_svm.offset_)
 
         with torch.no_grad():
             show_results(X_val_pos, torch_svm(X_val_pos), X_val_neg, torch_svm(X_val_neg), "torch")
-            # show_results(
-            #     X_val_pos,
-            #     torch.tensor(sk_svm.predict(X_val_pos.detach().cpu().numpy())),
-            #     X_val_neg,
-            #     torch.tensor(sk_svm.predict(X_val_neg.detach().cpu().numpy())),
-            #     "sk",
-            # )
+            show_results(
+                X_val_pos,
+                torch.tensor(sk_svm.predict(X_val_pos.detach().cpu().numpy())),
+                X_val_neg,
+                torch.tensor(sk_svm.predict(X_val_neg.detach().cpu().numpy())),
+                "sk",
+            )
             plt.show()

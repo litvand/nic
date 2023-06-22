@@ -45,7 +45,7 @@ def point(n_train, n_val, device):
     X = X.view(-1, 1).expand(-1, 2).clone()
 
     y = torch.zeros(n, dtype=torch.bool, device=device)
-    y[: n // 2 + 1].fill_(True)  # All zeros false except one
+    y[: n // 2 + n // 100 + 1].fill_(True)  # All zeros false except 1%
     return preprocess(n_train, X, y)
 
 
