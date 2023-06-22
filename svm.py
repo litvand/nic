@@ -49,7 +49,12 @@ class SVM(nn.Module):
         return self
 
     def fit_one_class(
-        self, X_train_pos, verbose=False, perfect_train=True, batch_size=10000, n_epochs=50
+        self,
+        X_train_pos,
+        verbose=False,
+        perfect_train=False,
+        n_epochs=1000,
+        margin=1.
     ):
         """
         Trains SVM to give a positive output for all training inputs, while minimizing the total set
@@ -67,32 +72,32 @@ class SVM(nn.Module):
 
         # In range [0; 1]; lower nu --> higher importance of including positive examples
         nu = 0.01 if perfect_train else 0.5
-        lr = 0.1
+        lr = 0.01
         assert lr * nu / 2 <= 1, (lr, nu)  # `lr * nu/2 > 1` breaks regularization.
-        margin = 1
 
-        optimizer = train.get_optimizer(
-            torch.optim.SGD, self.linear, weight_decay=nu / 2, lr=lr
-        )
+        # Momentum doesn't work well with one class
+        optimizer = train.get_optimizer(torch.optim.SGD, self.linear, weight_decay=nu / 2, lr=lr)
+        min_loss = torch.inf
+        min_state = None
 
         for epoch in range(n_epochs):
-            X_train_pos = X_train_pos[torch.randperm(len(X_train_pos))]
-
-            loss = None
-            for i_first in range(0, len(X_train_pos), batch_size):
-                X = X_train_pos[i_first : i_first + batch_size]
-                outputs = self.forward(X)
-                loss = hinge_loss(outputs, margin) + nu * self.linear.bias
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
+            loss = hinge_loss(self.forward(X_train_pos), margin) + nu * self.linear.bias
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
 
             with torch.no_grad():
                 if verbose or epoch == n_epochs - 1:
-                    print(f"Epoch {epoch}/{n_epochs} ({len(X_train_pos)//1000}k samples per epoch)")
-                    print(f"Last batch loss {loss.item()}")
+                    print(f"Epoch {epoch}/{n_epochs}; loss {loss.item()}")
+                
+                if loss <= min_loss:
+                    min_loss = loss
+                    min_state = deepcopy(self.linear.state_dict())
 
         with torch.no_grad():
+            if min_state is not None:
+                self.linear.load_state_dict(min_state)
+
             if perfect_train:
                 # Adjust bias by choosing minimum output that avoids false negatives.
                 min_output_should_be = 0.01
@@ -112,30 +117,30 @@ def show_results(X_pos, outputs_pos, X_neg, outputs_neg, *args):
 
 
 if __name__ == "__main__":
-    for run in range(5):
+    for run in range(3):
         print(f"-------------------------- Run {run} --------------------------")
         device = "cuda"
-        X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.triangle(5000, 5000, device)
+        X_train_pos, X_train_neg, X_val_pos, X_val_neg = data2d.point(5000, 5000, device)
 
         torch_svm = SVM(X_train_pos[0])
         print("Training SVM")
-        torch_svm.fit(X_train_pos, X_train_neg, verbose=False, margin=0.1)
+        torch_svm.fit_one_class(X_train_pos)
         print("Trained SVM")
         print(*torch_svm.named_parameters())
 
-        # sk_svm = SGDOneClassSVM(nu=0.5)
-        # if sk_svm is not None:
-        #     sk_svm.fit(X_train_pos.detach().cpu().numpy())
-        #     print("sk weights", sk_svm.coef_)
-        #     print("sk bias (== -offset)", -sk_svm.offset_)
+        sk_svm = SGDOneClassSVM(nu=0.5)
+        if sk_svm is not None:
+            sk_svm.fit(X_train_pos.detach().cpu().numpy())
+            print("sk weights", sk_svm.coef_)
+            print("sk bias (== -offset)", -sk_svm.offset_)
 
         with torch.no_grad():
             show_results(X_val_pos, torch_svm(X_val_pos), X_val_neg, torch_svm(X_val_neg), "torch")
-            # show_results(
-            #     X_val_pos,
-            #     torch.tensor(sk_svm.predict(X_val_pos.detach().cpu().numpy())),
-            #     X_val_neg,
-            #     torch.tensor(sk_svm.predict(X_val_neg.detach().cpu().numpy())),
-            #     "sk",
-            # )
+            show_results(
+                X_val_pos,
+                torch.tensor(sk_svm.predict(X_val_pos.detach().cpu().numpy())),
+                X_val_neg,
+                torch.tensor(sk_svm.predict(X_val_neg.detach().cpu().numpy())),
+                "sk",
+            )
             plt.show()
