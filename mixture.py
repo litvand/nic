@@ -135,8 +135,8 @@ class DetectorKe(nn.Module):
             # `ll_neg <= ll_pos - margin`, so `ll_pos > ll_neg.max() + margin` is just as good as
             # `ll_pos = ll_neg.max() + margin` and `ll_neg < ll_pos.min() - margin` is just as good
             # as `ll_neg = ll_pos.min() - margin`.
-            edge_pos = ll_pos.min() - 2.
-            edge_neg = ll_neg.max() + 2.
+            edge_pos = ll_pos.min() - 2.0
+            edge_neg = ll_neg.max() + 2.0
             low, high = min(edge_pos, edge_neg), max(edge_pos, edge_neg)
         return ll_pos.clamp(max=high).mean() - ll_neg.clamp(min=low).mean()
 
@@ -324,7 +324,7 @@ class DetectorMixture(nn.Module):
         """Likelihood of learned distribution at each point (ignoring which component it's from)"""
         # TODO: pycave can only handle input lengths that are a multiple of batch_size
         if len(X) > batch_size:
-            X = X[:batch_size * (len(X) // batch_size)]
+            X = X[: batch_size * (len(X) // batch_size)]
         return -self.mixture.score_samples(X).flatten()
 
     def fit(self, X_train, batch_size):
@@ -333,7 +333,7 @@ class DetectorMixture(nn.Module):
 
     def fit_predict(self, X_train, batch_size):
         if len(X_train) > batch_size:
-            X_train = X_train[:batch_size * (len(X_train) // batch_size)]
+            X_train = X_train[: batch_size * (len(X_train) // batch_size)]
         self.mixture.fit(X_train)
         log_likelihood = self.log_likelihood(X_train, batch_size)
         self.threshold.copy_(log_likelihood.min())
@@ -373,7 +373,7 @@ class DetectorKmeans(nn.Module):
         self.threshold = nn.Parameter(
             torch.empty(1, dtype=dtype, device=device), requires_grad=False
         )
-    
+
     def density(self, X):
         diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.center[None, :, :])
 
@@ -383,35 +383,35 @@ class DetectorKmeans(nn.Module):
 
         # Gaussian:
         d_ij = -0.5 * ke.Vi(X).weightedsqdist(
-            ke.Vj(self.center.data), ke.LazyTensor(1. / self.var[None, :, None])
+            ke.Vj(self.center.data), ke.LazyTensor(1.0 / self.var[None, :, None])
         )
         return d_ij.exp().matvec(self.pr).view(-1)
 
     def forward(self, X):
         return self.density(X) - self.threshold
-    
+
     def fit(self, *args, **kwargs):
         self.fit_predict(*args, **kwargs)
         return self
-    
+
     def fit_predict(
         self, X_train_pos, X_train_neg=None, X_val_pos=None, X_val_neg=None, n_retries=4
     ):
         """
         It can be better to leave X_train_neg=None
-        
+
         Retries only if validation data is available
         """
 
         params = None
-        best_acc = 0.
+        best_acc = 0.0
 
         outputs_train_pos = None
         with torch.no_grad():
             for _ in range(n_retries):
                 kmeans_(self.center, X_train_pos)
                 cluster_var_pr_(self.var, self.pr, X_train_pos, self.center)
-                
+
                 outputs_train_pos = self.density(X_train_pos)
                 if X_train_neg is not None:
                     # The arithmetic mean `(a+b)/2` and geometric mean `sqrt(a*b)` give surprisingly
@@ -431,9 +431,9 @@ class DetectorKmeans(nn.Module):
                     if val_acc > best_acc:
                         params = all_params(self)
                         best_acc = val_acc
-        
+
         set_params(self, params)
-        if params is not None:  
+        if params is not None:
             outputs_train_pos = self.density(X_train_pos)
         return outputs_train_pos - self.threshold
 
@@ -451,12 +451,15 @@ if __name__ == "__main__":
         X_train_pos, X_train_neg, X_val_pos, X_val_neg = fn(50000, 50000, device)
         print(
             f"len X_train_pos, X_train_neg, X_val_pos, X_val_neg:",
-            len(X_train_pos), len(X_train_neg), len(X_val_pos), len(X_val_neg)
+            len(X_train_pos),
+            len(X_train_neg),
+            len(X_val_pos),
+            len(X_val_neg),
         )
-        
+
         n_centers = 2 + len(X_train_pos) // 25
         print(f"n_centers: {n_centers}")
-        
+
         start = time.time()
         # batch_size = 1000
         # detector = DetectorMixture(
@@ -486,11 +489,14 @@ if __name__ == "__main__":
     balanced_accs = 0.5 * (accs_on_pos + accs_on_neg)
     print(
         "Balanced validation accuracy; min, max:",
-        percent(balanced_accs.mean()), percent(balanced_accs.min()), percent(balanced_accs.max())
+        percent(balanced_accs.mean()),
+        percent(balanced_accs.min()),
+        percent(balanced_accs.max()),
     )
     print(
         "True positive rate, true negative rate:",
-        percent(accs_on_pos.mean()), percent(accs_on_neg.mean())
+        percent(accs_on_pos.mean()),
+        percent(accs_on_neg.mean()),
     )
 
     # More detailed results from the last run

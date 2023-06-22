@@ -23,7 +23,7 @@ def git_commit():
     else:
         repo.git.add(".")
         repo.git.commit("-m", "_Automated commit")
-    
+
     return repo.head.object.hexsha
 
 

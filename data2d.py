@@ -17,32 +17,33 @@ def preprocess(n_train, X, y):
     X_train_pos, X_train_neg = X_train[y_train], X_train[~y_train]
     X_val_pos, X_val_neg = X_val[y_val], X_val[~y_val]
 
-    X_train_neg, X_val_neg = X_train_neg[:len(X_train_pos)], X_val_neg[:len(X_val_pos)]
+    X_train_neg, X_val_neg = X_train_neg[: len(X_train_pos)], X_val_neg[: len(X_val_pos)]
 
     whiten = Whiten(X_train_pos[0]).fit(X_train_pos, zca=True)
     return tuple(
         None if len(X) == 0 else whiten(X) for X in (X_train_pos, X_train_neg, X_val_pos, X_val_neg)
     )
 
+
 def point(n_train, n_val, device):
     n = n_train + n_val
 
     X = torch.zeros(n, device=device)  # Half zero
-    X[:n//2] = torch.linspace(0.01, 1, n//2, device=device)
+    X[: n // 2] = torch.linspace(0.01, 1, n // 2, device=device)
     X = X.view(-1, 1).expand(-1, 2).clone()
-    
+
     y = torch.zeros(n, dtype=torch.bool, device=device)
-    y[:n//2 + 1].fill_(True)  # All zeros false except one
+    y[: n // 2 + 1].fill_(True)  # All zeros false except one
     return preprocess(n_train, X, y)
 
 
 def spiral(n_train, n_val, device):
     angle = torch.linspace(0, 2 * np.pi, n_train + n_val + 1, device=device)[:-1]
     X = torch.stack((0.5 + 0.4 * (angle / 7) * angle.cos(), 0.5 + 0.3 * angle.sin()), 1)
-    
+
     X.add_(torch.randn(X.shape, device=device), alpha=0.02)
     X = 3 * X[torch.randperm(len(X))]
-    
+
     y = torch.ones(len(X), dtype=torch.bool, device=X.device)
     y[0], y[-1] = False, False
     return preprocess(n_train, X, y)
@@ -102,9 +103,9 @@ def scatter_outputs_y(X_pos, outputs_pos, X_neg, outputs_neg, model_name, center
     outputs_pos = outputs_pos.detach().cpu().numpy()
     outputs_neg = outputs_neg.detach().cpu().numpy()
 
-    X_pos_pos = X_pos[outputs_pos >= 0]   # true positive
+    X_pos_pos = X_pos[outputs_pos >= 0]  # true positive
     X_pos_neg = X_pos[outputs_pos < 0]  # false negative
-    X_neg_pos = X_neg[outputs_neg >= 0]   # false positive
+    X_neg_pos = X_neg[outputs_neg >= 0]  # false positive
     X_neg_neg = X_neg[outputs_neg < 0]  # true negative
 
     # pos_pos_outputs = outputs[pos & pos_output]  # true positive

@@ -69,15 +69,15 @@ class NIC(nn.Module):
             n_classes = layers[-1].size(1)  # Last layer's number of features
 
         self.whitening = ZipN([Whiten(a[0]) for a in layers])
-        
+
         self.value_detectors = ZipN([DetectorKmeans(layers[-1][0], n_centers)])
 
-        self.layer_classifiers = ZipN([
-            nn.Linear(a.size(1), n_classes).to(device) for a in layers[:-2]
-        ])
-        self.prov_detectors = ZipN([
-            DetectorKmeans(layers[-1][0], n_centers) for _ in self.layer_classifiers
-        ])
+        self.layer_classifiers = ZipN(
+            [nn.Linear(a.size(1), n_classes).to(device) for a in layers[:-2]]
+        )
+        self.prov_detectors = ZipN(
+            [DetectorKmeans(layers[-1][0], n_centers) for _ in self.layer_classifiers]
+        )
 
         densities = torch.empty(1, dtype=dtype, device=device).expand(
             len(self.value_detectors) + len(self.prov_detectors)
@@ -87,7 +87,6 @@ class NIC(nn.Module):
         print("inited nic")
 
     def forward(self, batch, trained_model):
-
         trained_model.eval()
         layers = get_whitened_layers(self.whitening, trained_model, batch)
         value_densities = self.value_detectors(layers[-1:])
@@ -103,7 +102,6 @@ class NIC(nn.Module):
         return self.final_detector(self.final_whiten(densities))
 
     def fit(self, data, trained_model):
-
         (train_inputs, train_targets), (val_inputs, val_targets) = data
         trained_model.eval()
         n_centers = len(self.final_detector.center)
@@ -164,7 +162,7 @@ def train_layer_detectors(detectors, train_layers, detector_name):
     for i_layer, train_layer in enumerate(train_layers):
         print(f"--- {detector_name} detector {i_layer}/{len(train_layers)} ---")
         train_densities.append(detectors[i_layer].fit_predict(train_layer))
-    
+
     return train_densities
 
 
@@ -189,12 +187,10 @@ class DetectorNIC(nn.Module):
             layers = [l.flatten(1) for l in layers]
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
             self.value_detectors = nn.ModuleList([DetectorKmeans(l[0], n_centers) for l in layers])
-            density = torch.empty(
-                1, dtype=example_img.dtype, device=example_img.device   # rm
-            )
+            density = torch.empty(1, dtype=example_img.dtype, device=example_img.device)  # rm
             self.final_whiten = Normalize(density)
             self.final_detector = DetectorKmeans(density, n_centers)
-    
+
     def forward(self, inputs, trained_model):
         trained_model.eval()
 
@@ -203,7 +199,7 @@ class DetectorNIC(nn.Module):
         print("whiten")
         layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
         print([layer.shape for layer in layers])
-        
+
         print("value detectors")
         densities = []
         for value_detector, layer in zip(self.value_detectors, layers):
@@ -214,7 +210,7 @@ class DetectorNIC(nn.Module):
         print("whitened densities", densities.max(), densities.mean(), densities.min())
 
         print("final")
-        return self.final_detector(densities), densities   # rm
+        return self.final_detector(densities), densities  # rm
 
     def fit(self, train_inputs, trained_model):
         """
@@ -222,7 +218,7 @@ class DetectorNIC(nn.Module):
               Targets should be class indices.
         """
         trained_model.eval()
-        
+
         with torch.no_grad():
             train_layers = [train_inputs] + trained_model.activations(train_inputs)
             train_layers = [l.flatten(1) for l in train_layers]
@@ -239,9 +235,9 @@ class DetectorNIC(nn.Module):
         with torch.no_grad():
             # densities = cat_features(densities)
             print("final whiten")
-            self.final_whiten.fit(densities[0].view(-1, 1), unit_range=True)   # rm
-            densities = self.final_whiten(densities[0].view(-1, 1))   # rm
-        
+            self.final_whiten.fit(densities[0].view(-1, 1), unit_range=True)  # rm
+            densities = self.final_whiten(densities[0].view(-1, 1))  # rm
+
         print("final detector")
         self.final_detector.fit(densities)
         return self
@@ -263,7 +259,7 @@ if __name__ == "__main__":
     n_centers = 2 + len(train_inputs) // 100
     detector = DetectorNIC(train_inputs[0], trained_model, n_centers)
     detector.fit(train_inputs, trained_model)
-    
+
     print("fgsm")
     val_inputs_neg = data[1][0].clone()
     adversary.fgsm_(val_inputs_neg, data[1][1], trained_model, 0.2)
@@ -271,12 +267,19 @@ if __name__ == "__main__":
         val_outputs_pos = detector(data[1][0], trained_model)
         val_outputs_neg = detector(val_inputs_neg, trained_model)
     print(
-        "val outputs pos", val_outputs_pos.max(), val_outputs_pos.mean(), val_outputs_pos.min(),
-        "neg", val_outputs_neg.max(), val_outputs_neg.mean(), val_outputs_neg.min())
+        "val outputs pos",
+        val_outputs_pos.max(),
+        val_outputs_pos.mean(),
+        val_outputs_pos.min(),
+        "neg",
+        val_outputs_neg.max(),
+        val_outputs_neg.mean(),
+        val_outputs_neg.min(),
+    )
     print(
         "max, min neg < 0",
         val_outputs_neg[val_outputs_neg < 0].max(),
-        val_outputs_neg[val_outputs_neg < 0].min()
+        val_outputs_neg[val_outputs_neg < 0].min(),
     )
     print("val acc", percent(acc(val_outputs_pos >= 0)), percent(acc(val_outputs_neg < 0)))
     data2d.scatter_outputs_y(

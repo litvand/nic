@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import matplotlib.pyplot as plt
 import torch
+
 # from sklearn.svm import OneClassSVM
 from sklearn.linear_model import SGDOneClassSVM
 from torch import nn
@@ -22,10 +23,8 @@ class DetectorSVM(nn.Module):
 
     def forward(self, X):
         return self.linear(X).view(-1)
-    
-    def fit(
-        self, X_train_pos, verbose=False, correct_on_train=True, batch_size=10000, n_epochs=50
-    ):
+
+    def fit(self, X_train_pos, verbose=False, correct_on_train=True, batch_size=10000, n_epochs=50):
         """
         Trains SVM to give a positive output for all training inputs, while minimizing the total set
         of inputs for which its output is positive.
@@ -47,7 +46,7 @@ class DetectorSVM(nn.Module):
         margin = 1
 
         print("Training SVM")
-        optimizer = train.get_optimizer(torch.optim.SGD, self.linear, weight_decay=nu/2, lr=lr)
+        optimizer = train.get_optimizer(torch.optim.SGD, self.linear, weight_decay=nu / 2, lr=lr)
 
         for epoch in range(n_epochs):
             X_train_pos = X_train_pos[torch.randperm(len(X_train_pos))]
@@ -80,7 +79,7 @@ class DetectorSVM(nn.Module):
 
 def show_results(X_pos, outputs_pos, X_neg, outputs_neg, *args):
     # data2d.scatter_outputs_y(X_pos, outputs_pos, X_neg, outputs_neg, *args)
-    
+
     acc_on_pos, acc_on_neg = acc(outputs_pos >= 0), acc(outputs_neg < 0)
     print("Balanced accuracy:", percent(0.5 * (acc_on_pos + acc_on_neg)))
     print("True positive, true negative rate:", percent(acc_on_pos), percent(acc_on_neg))
@@ -103,18 +102,12 @@ if __name__ == "__main__":
             print("sk bias (== -offset)", -sk_svm.offset_)
 
         with torch.no_grad():
-            show_results(
-                X_val_pos,
-                torch_svm(X_val_pos),
-                X_val_neg,
-                torch_svm(X_val_neg),
-                "torch"
-            )
+            show_results(X_val_pos, torch_svm(X_val_pos), X_val_neg, torch_svm(X_val_neg), "torch")
             show_results(
                 X_val_pos,
                 torch.tensor(sk_svm.predict(X_val_pos.detach().cpu().numpy())),
                 X_val_neg,
                 torch.tensor(sk_svm.predict(X_val_neg.detach().cpu().numpy())),
-                "sk"
+                "sk",
             )
             plt.show()

@@ -94,18 +94,19 @@ if __name__ == "__main__":
         detector.eval()
         val_outputs = detector(detector_val_imgs, trained_model)
         print(
-            val_outputs.max(), val_outputs.mean(), val_outputs.min(),
-            "thresh", detector.final_detector.threshold,
+            val_outputs.max(),
+            val_outputs.mean(),
+            val_outputs.min(),
+            "thresh",
+            detector.final_detector.threshold,
             "neg",
             val_outputs[detector_val_targets != 1].max(),
-            val_outputs[detector_val_targets != 1].mean()
+            val_outputs[detector_val_targets != 1].mean(),
         )
 
         thresholds = [i / 10 for i in range(-5, 7)]
         for t in thresholds:
-            eval.print_bin_acc(
-                val_outputs + t, detector_val_targets == 1, f"Threshold {t}"
-            )
+            eval.print_bin_acc(val_outputs + t, detector_val_targets == 1, f"Threshold {t}")
 
     # eval.plot_distr_overlap(
     #     prs_on_adv,

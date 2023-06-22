@@ -8,10 +8,11 @@ import data2d
 # With LazyTensor: 50 loops, best of 5: 5.53 msec per loop
 # Without LazyTensor: 10 loops, best of 5: 20.6 msec per loop
 
+
 def kmeans_farthest_(centers, X_train):
     """
     Initialize kmeans centers by choosing the farthest point from existing centers.
-    
+
     Overwrites centers
     """
 
@@ -34,7 +35,7 @@ def kmeans_plusplus_(centers, X_train):
     """
     Initialize kmeans centers by choosing points with probability proportional to their distance
     from existing centers.
-    
+
     Overwrites centers
     """
 
@@ -60,7 +61,7 @@ def kmeans_plusplus_(centers, X_train):
 def kmeans_lloyd_(centers, X_train, accuracy):
     """
     Implements Lloyd's algorithm for the Euclidean metric.
-    
+
     Assumes centers are already initialized and modifies them.
     """
 
@@ -103,7 +104,7 @@ def kmeans_(centers, X_train, accuracy=0.9999):
     X_train: Training points (n_points, n_features)
     """
 
-    i_centers = torch.randperm(len(X_train), device=X_train.device)[:len(centers)]
+    i_centers = torch.randperm(len(X_train), device=X_train.device)[: len(centers)]
     torch.index_select(X_train, 0, i_centers, out=centers)
     kmeans_lloyd_(centers, X_train, accuracy)
 
@@ -127,7 +128,7 @@ def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-8):
     #     var[j] = dist_i[j_center_from_i == j].mean()
     var.scatter_reduce_(0, j_center_from_i, dist_i, reduce="mean", include_self=False)
     var += min_var
-    
+
     torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(X_train)), out=pr)
 
 
