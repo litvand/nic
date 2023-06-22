@@ -131,17 +131,6 @@ def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-8):
     torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(X_train)), out=pr)
 
 
-def gaussian_kernel(X, center, var, weight):
-    """
-    X: (n_points, n_features)
-    center: (n_centers, n_features)
-    var: Variances (n_centers)
-    weight: Center weights (n_centers)
-    """
-
-    
-
-
 def bench():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     X_train = data2d.hollow(5000, 1, device, 100)[0]

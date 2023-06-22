@@ -27,12 +27,12 @@ def preprocess(n_train, X, y):
 def point(n_train, n_val, device):
     n = n_train + n_val
 
-    X = torch.zeros(n, device=device)
+    X = torch.zeros(n, device=device)  # Half zero
     X[:n//2] = torch.linspace(0.01, 1, n//2, device=device)
     X = X.view(-1, 1).expand(-1, 2).clone()
     
     y = torch.zeros(n, dtype=torch.bool, device=device)
-    y[:n//2 + 1].fill_(True)
+    y[:n//2 + 1].fill_(True)  # All zeros false except one
     return preprocess(n_train, X, y)
 
 
