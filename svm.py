@@ -24,7 +24,7 @@ class SVM(nn.Module):
     def forward(self, X):
         return self.linear(X).view(-1)
     
-    def fit(self, train_X_pos, train_X_neg, verbose=False, n_epochs=300, margin=0.5, lr=0.1):
+    def fit(self, train_X_pos, train_X_neg, verbose=False, n_epochs=1000, margin=0.5, lr=0.1):
         optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=lr)
         min_loss = torch.inf
         min_state = None

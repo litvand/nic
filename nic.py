@@ -146,7 +146,7 @@ class NIC(nn.Module):
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
             self.value_detectors = nn.ModuleList([DetectorKmeans(l[0], n_centers) for l in layers])
             # torch.zeros(len(value_detectors))
-            densities = torch.empty(1, dtype=x_example.dtype, device=x_example.device)
+            densities = torch.zeros(1, dtype=x_example.dtype, device=x_example.device)
             self.final_whiten = Normalize(densities)
             self.final_detector = SVM(densities)
 
@@ -170,7 +170,7 @@ class NIC(nn.Module):
         print("final")
         return self.final_detector(densities)
 
-    def fit(self, train_X_pos, trained_model):
+    def fit(self, train_X_pos, train_X_neg, trained_model):
         trained_model.eval()
 
         with torch.no_grad():
@@ -192,8 +192,12 @@ class NIC(nn.Module):
             self.final_whiten.fit(densities)
             densities = self.final_whiten(densities)
 
+            densities_neg = self.final_whiten(
+                self.value_detectors[0](self.whiten[0](train_X_neg)).view(-1, 1)
+            )
+
         print("final detector")
-        self.final_detector.fit(densities)
+        self.final_detector.fit(densities, densities_neg)
         return self
 
 
@@ -202,8 +206,9 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     print("data")
-    data = mnist.load_data(n_train=20000, n_val=2000, device=device)
-    train_X_pos = data[0][0]
+    (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
+        n_train=20000, n_val=2000, device=device
+    )
 
     print("model")
     trained_model = classifier.FullyConnected(train_X_pos[0]).to(device)
@@ -211,16 +216,16 @@ if __name__ == "__main__":
 
     print("detector")
     train_X_neg = train_X_pos.clone()
-    adversary.fgsm_(train_X_neg, data[1][1], trained_model, 0.2)
-    detector = NIC(train_X_pos[0], train_X_neg, trained_model, n_centers)
+    adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
+    detector = NIC(train_X_pos[0], trained_model, n_centers=1 + len(train_X_pos)//100)
     detector.fit(train_X_pos, train_X_neg, trained_model)
 
     print("fgsm")
-    val_imgs_neg = data[1][0].clone()
-    adversary.fgsm_(val_imgs_neg, data[1][1], trained_model, 0.2)
+    val_X_neg = val_X_pos.clone()
+    adversary.fgsm_(val_X_neg, val_y, trained_model, 0.2)
     with torch.no_grad():
-        val_outputs_pos = detector(data[1][0], trained_model)
-        val_outputs_neg = detector(val_imgs_neg, trained_model)
+        val_outputs_pos = detector(val_X_pos, trained_model)
+        val_outputs_neg = detector(val_X_neg, trained_model)
     print(
         "val outputs pos",
         val_outputs_pos.max(),
@@ -231,35 +236,5 @@ if __name__ == "__main__":
         val_outputs_neg.mean(),
         val_outputs_neg.min(),
     )
-    print(
-        "max, min neg < 0",
-        val_outputs_neg[val_outputs_neg < 0].max(),
-        val_outputs_neg[val_outputs_neg < 0].min(),
-    )
     print("val acc", percent(acc(val_outputs_pos >= 0)), percent(acc(val_outputs_neg < 0)))
-    data2d.scatter_outputs_y(
-        val_outputs_pos.view(-1, 1).expand(-1, 2),
-        val_outputs_pos,
-        val_outputs_neg.view(-1, 1).expand(-1, 2),
-        val_outputs_neg,
-        f"{type(detector).__name__} validation",
-        # centers=detector.final_detector.center.expand(-1, 2)
-    )
-    plt.show()
     # train.save(detector, f"nic{n_centers}-onfc20k")
-
-    # print("nic")
-    # nic = NIC(
-    #     train_X_pos[0], trained_model, n_centers=2 + len(train_X_pos) // 50
-    # ).fit(data, trained_model)
-    # train.save(nic, "nic-onfc20k")
-    # # train.load(nic, "nic-onfc20k-036721ae464e534d53585e0a62bf0ecc6c25405f")
-
-    # detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
-    #     data[1][0], data[1][1], trained_model, 0.2
-    # )
-    # with torch.no_grad():
-    #     nic.eval()
-    #     eval.print_bin_acc(
-    #         nic(detector_val_imgs, trained_model), detector_val_targets == 1, "NIC"
-    #     )

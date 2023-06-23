@@ -412,41 +412,9 @@ def reciprocal_threshold(densities_pos, densities_neg):
     return 2. / (1. / densities_pos.min() + 1. / densities_neg.max())
 
 
-def balanced_threshold(densities_pos, densities_neg):
-    low, high = densities_pos.min(), densities_neg.max()
-    print("low, high", round_tensor(low), round_tensor(high))
-    if low > high:
-        # Can classify perfectly
-        return 0.5 * (high + low)
-
-    if low == high:
-        median = high
-    else:
-        assert low < high, (low, high)
-
-        # TODO: Only exact when len(densities_pos) == len(densities_neg)
-        # All outputs in [low; high]
-        ambiguous_densities = torch.cat((
-            densities_pos[densities_pos <= high], densities_neg[densities_neg >= low]
-        ))
-        median = torch.quantile(ambiguous_densities, 0.5)
-
-        print("median", round_tensor(median))
-        assert low <= median <= high, (low, median, high)
-
-        if median < high:
-            # Positive if density >= threshold, so need threshold > median
-            return ambiguous_densities[ambiguous_densities > median].min()
-
-    assert median == high, (median, high)
-    # Positive if density >= threshold, so need threshold > median
-    above_median = densities_pos[densities_pos > median]
-    return above_median.min() if len(above_median) > 0 else median + 1e-5
-
-
-def true_negatives_threshold(densities_pos, densities_neg, acc_neg=0.51):
-    large_neg = torch.quantile(densities_neg, acc_neg)
-    print("large_neg", round_tensor(large_neg), densities_neg.min(), densities_neg.max())
+def true_negatives_threshold(densities_pos, densities_neg, min_acc_on_neg):
+    large_neg = torch.quantile(densities_neg, min_acc_on_neg)
+    # Classified as positive if density >= threshold, so need threshold > large_neg
     above_neg = densities_pos[densities_pos > large_neg]
     return above_neg.min() if len(above_neg) > 0 else large_neg + 1e-5
 
@@ -490,15 +458,20 @@ class DetectorKmeans(nn.Module):
         return self
 
     def fit_predict(
-        self, train_X_pos, train_X_neg=None, val_X_pos=None, val_X_neg=None, n_retries=4
+        self,
+        train_X_pos,
+        train_X_neg=None,
+        val_X_pos=None,
+        val_X_neg=None,
+        n_retries=4,
+        expected_acc=0.65
     ):
         """
-        It can be better to leave train_X_neg=None
+        It can be better to leave train_X_neg=None. train_X_neg is only used to choose the
+        threshold.
 
-        Retries only if validation data is available
+        Retries only if validation data is available.
         """
-
-        print("train_X_neg", torch.unique(train_X_neg[:, 0]), torch.unique(train_X_neg[:, 1]))
 
         params = None
         best_acc = 0.0
@@ -511,30 +484,25 @@ class DetectorKmeans(nn.Module):
                 train_densities_pos = self.density(train_X_pos)
                 nans = train_X_pos[train_densities_pos.isnan()]
                 if len(nans) > 0:
-                    print(len(train_X_pos), "nans", len(nans), nans)
+                    print(len(train_X_pos), "ERROR: nans", len(nans), nans)
                     print(
                         "[self.vars], [self.prs]",
                         f"[{round_tensor(self.vars.min())}-{round_tensor(self.vars.max())}]",
                         f"[{round_tensor(self.prs.min())}-{round_tensor(self.prs.max())}]",
                     )
+                    continue
 
-                print(
-                    "density at train_X_neg[0], train_X_pos[0]",
-                    round_tensor(self.density(train_X_neg[:1])),
-                    round_tensor(self.density(train_X_pos[:1]))
-                )
                 if train_X_neg is not None:
                     # The arithmetic mean `(a+b)/2` gives surprisingly bad results, but sometimes
                     # the geometric mean `sqrt(a*b)`or reciprocal mean `2 / (1/a + 1/b)` is better;
                     # maybe when it's the geometric mean of densities or the reciprocal mean of
                     # reciprocal distances.
-                    self.threshold.copy_(
-                        true_negatives_threshold(train_densities_pos, self.density(train_X_neg))
-                    )
+                    self.threshold.copy_(true_negatives_threshold(
+                        train_densities_pos, self.density(train_X_neg), expected_acc
+                    ))
                 else:
                     self.threshold.copy_(train_densities_pos.min())
 
-                print("threshold", round_tensor(self.threshold))
                 if n_retries > 1 and val_X_pos is not None and val_X_neg is not None:
                     pos_acc = acc(self.density(val_X_pos) > self.threshold)
                     neg_acc = acc(self.density(val_X_neg) <= self.threshold)
@@ -552,10 +520,10 @@ class DetectorKmeans(nn.Module):
 
 if __name__ == "__main__":
     device = "cpu"
-    fns = [data2d.point]
-    # fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line, data2d.point]
+    fns = [data2d.overlap]
+    # fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 2
+    n_runs = 8
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
