@@ -9,29 +9,29 @@ import data2d
 # Without LazyTensor: 10 loops, best of 5: 20.6 msec per loop
 
 
-def kmeans_farthest_(centers, X_train):
+def kmeans_farthest_(centers, train_X):
     """
     Initialize kmeans centers by choosing the farthest point from existing centers.
 
     Overwrites centers
     """
 
-    centers[0] = X_train[0]
+    centers[0] = train_X[0]
 
     # Square distance of each point from its closest center
-    dists = ((X_train - centers[0]) ** 2).sum(-1)
+    dists = ((train_X - centers[0]) ** 2).sum(-1)
 
     for i_center in range(1, len(centers)):
         # Point that is farthest from previous centers
-        centers[i_center] = X_train[dists.argmax().item()]
+        centers[i_center] = train_X[dists.argmax().item()]
         if i_center == len(centers) - 1:
             break  # Don't need distances
 
-        new_dists = ((X_train - centers[i_center]) ** 2).sum(-1)
+        new_dists = ((train_X - centers[i_center]) ** 2).sum(-1)
         torch.minimum(dists, new_dists, out=dists)
 
 
-def kmeans_plusplus_(centers, X_train):
+def kmeans_plusplus_(centers, train_X):
     """
     Initialize kmeans centers by choosing points with probability proportional to their distance
     from existing centers.
@@ -39,10 +39,10 @@ def kmeans_plusplus_(centers, X_train):
     Overwrites centers
     """
 
-    centers[0] = X_train[0]
+    centers[0] = train_X[0]
 
     # Square distance of each point from its closest center
-    dists = ((X_train - centers[0]) ** 2).sum(-1)
+    dists = ((train_X - centers[0]) ** 2).sum(-1)
 
     for i_center in range(1, len(centers)):
         # Sample with probability proportional to square distance from previous centers.
@@ -50,15 +50,15 @@ def kmeans_plusplus_(centers, X_train):
         # Sampling with replacement is probably faster than without replacement, but doesn't affect
         # the result, since we only take one sample.
         idx = torch.multinomial(dists, 1, replacement=True).item()
-        centers[i_center] = X_train[idx]
+        centers[i_center] = train_X[idx]
         if i_center == len(centers) - 1:
             break  # Don't need distances
 
-        new_dists = ((X_train - centers[i_center]) ** 2).sum(-1)
+        new_dists = ((train_X - centers[i_center]) ** 2).sum(-1)
         torch.minimum(dists, new_dists, out=dists)
 
 
-def kmeans_lloyd_(centers, X_train, accuracy):
+def kmeans_lloyd_(centers, train_X, accuracy):
     """
     Implements Lloyd's algorithm for the Euclidean metric.
 
@@ -67,7 +67,7 @@ def kmeans_lloyd_(centers, X_train, accuracy):
 
     assert 0 <= accuracy <= 1, accuracy
 
-    x_i = LazyTensor(X_train[:, None, :])
+    x_i = LazyTensor(train_X[:, None, :])
     center_j = LazyTensor(centers[None, :, :])
 
     avg_dist = torch.inf
@@ -82,8 +82,8 @@ def kmeans_lloyd_(centers, X_train, accuracy):
         # M step: update the center to the cluster average
         centers.scatter_reduce_(
             0,
-            j_center_from_i.view(-1, 1).expand_as(X_train),
-            X_train,
+            j_center_from_i.view(-1, 1).expand_as(train_X),
+            train_X,
             reduce="mean",
             include_self=False,
         )
@@ -98,48 +98,48 @@ def kmeans_lloyd_(centers, X_train, accuracy):
             avg_dist = new_avg_dist
 
 
-def kmeans_(centers, X_train, accuracy=0.9999):
+def kmeans_(centers, train_X, accuracy=0.9999):
     """
     centers: Cluster centers (n_centers, n_features). Will be overwritten.
-    X_train: Training points (n_points, n_features)
+    train_X: Training points (n_points, n_features)
     """
 
-    i_centers = torch.randperm(len(X_train), device=X_train.device)[: len(centers)]
-    torch.index_select(X_train, 0, i_centers, out=centers)
-    kmeans_lloyd_(centers, X_train, accuracy)
+    i_centers = torch.randperm(len(train_X), device=train_X.device)[: len(centers)]
+    torch.index_select(train_X, 0, i_centers, out=centers)
+    kmeans_lloyd_(centers, train_X, accuracy)
 
 
-def cluster_var_pr_(var, pr, X_train, centers, min_var=1e-8):
+def cluster_var_pr_(var, pr, train_X, centers, min_var=1e-8):
     """
     Overwrites `var` and `pr`
 
     var: Variance for each cluster (n_centers)
     pr: Probability of each cluster (n_centers)
-    X_train: Training points (n_points, n_features)
+    train_X: Training points (n_points, n_features)
     centers: Center of each cluster (n_centers, n_features)
     min_var: Variance of a cluster with a single point
     """
 
-    diff_ij = LazyTensor(X_train[:, None, :]) - LazyTensor(centers[None, :, :])
+    diff_ij = LazyTensor(train_X[:, None, :]) - LazyTensor(centers[None, :, :])
     dist_i, j_center_from_i = (diff_ij**2).sum(2).min_argmin(1)
-    dist_i, j_center_from_i = dist_i.view(len(X_train)), j_center_from_i.view(len(X_train))
+    dist_i, j_center_from_i = dist_i.view(len(train_X)), j_center_from_i.view(len(train_X))
 
     # for j in range(len(centers)):
     #     var[j] = dist_i[j_center_from_i == j].mean()
     var.scatter_reduce_(0, j_center_from_i, dist_i, reduce="mean", include_self=False)
     var += min_var
 
-    torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(X_train)), out=pr)
+    torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(train_X)), out=pr)
 
 
 def bench():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    X_train = data2d.hollow(5000, 1, device, 100)[0]
-    print("X_train", len(X_train))
+    train_X = data2d.hollow(5000, 1, device, 100)[0]
+    print("train_X", len(train_X))
 
     def b():
         # t = time.time()
-        centers = kmeans(X_train, 1 + len(X_train) // 100)
+        centers = kmeans(train_X, 1 + len(train_X) // 100)
         torch.cuda.synchronize()
         # print(time.time() - t)
         return centers

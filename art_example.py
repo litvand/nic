@@ -39,7 +39,7 @@ if __name__ == "__main__":
     # Step 1: Load the MNIST dataset
 
     (
-        (x_train, y_train),
+        (x_train, train_y),
         (x_test, y_test),
         min_pixel_value,
         max_pixel_value,
@@ -50,11 +50,11 @@ if __name__ == "__main__":
 
     x_train = np.transpose(x_train, (0, 3, 1, 2)).astype(np.float32)
     x_test = np.transpose(x_test, (0, 3, 1, 2)).astype(np.float32)
-    x_train, y_train, x_test, y_test = (
+    x_train, train_y, x_test, y_test = (
         x_train[:58000],
-        y_train[:58000],
+        train_y[:58000],
         x_train[58000:],
-        y_train[58000:],
+        train_y[58000:],
     )
 
     # Step 2: Create the model
@@ -79,7 +79,7 @@ if __name__ == "__main__":
 
     # Step 4: Train the ART classifier
 
-    classifier.fit(x_train, y_train, batch_size=64, nb_epochs=6)
+    classifier.fit(x_train, train_y, batch_size=64, nb_epochs=6)
 
     # Step 5: Evaluate the ART classifier on benign test examples
 

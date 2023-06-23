@@ -26,6 +26,10 @@ def div_zero(a, b):
     return a if a == 0 else a / b
 
 
+def round_tensor(x):
+    return round(x.item(), 5)
+
+
 def percent(x):
     return f"{round(100 * x.item(), 2)}%"
 

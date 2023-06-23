@@ -9,7 +9,9 @@ import mnist
 import train
 from eval import acc, percent
 from mixture import DetectorKmeans
+from svm import SVM
 from train import Normalize, Whiten
+
 
 def cat_layer_pairs(layers):
     """
@@ -40,15 +42,15 @@ def cat_features(features):
 
 
 # class NIC(nn.Module):
-#     def __init__(self, example_img, trained_model, n_centers):
+#     def __init__(self, x_example, trained_model, n_centers):
 #         super().__init__()
 
-#         dtype, device = example_img.dtype, example_img.device
+#         dtype, device = x_example.dtype, x_example.device
 
 #         trained_model.eval()
 #         with torch.no_grad():
-#             imgs = example_img.unsqueeze(0)
-#             layers = [imgs] + trained_model.activations(imgs)
+#             X = x_example.unsqueeze(0)
+#             layers = [X] + trained_model.activations(X)
 #             layers = [l.flatten(1) for l in layers]
 #             n_classes = layers[-1].size(1)  # Last layer's number of features
 
@@ -86,13 +88,13 @@ def cat_features(features):
 #         return self.final_detector(self.final_whiten(densities))
 
 #     def fit(self, data, trained_model):
-#         (train_imgs, train_targets), (val_imgs, val_targets) = data
+#         (train_X_pos, train_targets), (val_imgs, val_targets) = data
 #         trained_model.eval()
 #         n_centers = len(self.final_detector.center)
 
 #         with torch.no_grad():
 #             print("Whiten NIC layers")
-#             train_layers = [train_imgs] + trained_model.activations(train_imgs)
+#             train_layers = [train_X_pos] + trained_model.activations(train_X_pos)
 #             train_layers = [layer.flatten(1) for layer in train_layers]
 #             print("train_layers", train_layers)
 #             for whiten, layer in zip(self.whitening, train_layers):
@@ -122,7 +124,7 @@ def cat_features(features):
 #         return self
 
 
-class DetectorNIC(nn.Module):
+class NIC(nn.Module):
     """
     Higher output means a higher probability of the img image being within the training
     distribution, i.e. non-adversarial.
@@ -133,24 +135,25 @@ class DetectorNIC(nn.Module):
                     last layer and optionally activations of some earlier layers.
     """
 
-    def __init__(self, example_img, trained_model, n_centers):
+    def __init__(self, x_example, trained_model, n_centers):
         super().__init__()
-        imgs = example_img.unsqueeze(0)
+        X = x_example.unsqueeze(0)
         trained_model.eval()
 
         with torch.no_grad():
-            layers = [imgs] + trained_model.activations(imgs)
+            layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
             self.value_detectors = nn.ModuleList([DetectorKmeans(l[0], n_centers) for l in layers])
-            density = torch.empty(1, dtype=example_img.dtype, device=example_img.device)  # rm
-            self.final_whiten = Normalize(density)
-            self.final_detector = DetectorKmeans(density, n_centers)
+            # torch.zeros(len(value_detectors))
+            densities = torch.empty(1, dtype=x_example.dtype, device=x_example.device)
+            self.final_whiten = Normalize(densities)
+            self.final_detector = SVM(densities)
 
-    def forward(self, imgs, trained_model):
+    def forward(self, X, trained_model):
         trained_model.eval()
 
-        layers = [imgs] + trained_model.activations(imgs)
+        layers = [X] + trained_model.activations(X)
         layers = [l.flatten(1) for l in layers]
         print("whiten")
         layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
@@ -161,22 +164,17 @@ class DetectorNIC(nn.Module):
         for value_detector, layer in zip(self.value_detectors, layers):
             densities.append(value_detector(layer))
 
-        return densities[0]  # rm
-        densities = self.final_whiten(densities[0].view(-1, 1))
+        densities = self.final_whiten(densities[0].view(-1, 1))   # cat_features(densities)
         print("whitened densities", densities.max(), densities.mean(), densities.min())
 
         print("final")
-        return self.final_detector(densities), densities  # rm
+        return self.final_detector(densities)
 
-    def fit(self, train_imgs, trained_model):
-        """
-        data: ((training_imgs, training_targets), (validation_imgs, validation_targets))
-              Targets should be class indices.
-        """
+    def fit(self, train_X_pos, trained_model):
         trained_model.eval()
 
         with torch.no_grad():
-            train_layers = [train_imgs] + trained_model.activations(train_imgs)
+            train_layers = [train_X_pos] + trained_model.activations(train_X_pos)
             train_layers = [l.flatten(1) for l in train_layers]
             print("whiten")
             for whiten, layer in zip(self.whiten, train_layers):
@@ -189,10 +187,10 @@ class DetectorNIC(nn.Module):
             densities.append(value_detector.fit_predict(layer))
 
         with torch.no_grad():
-            # densities = cat_features(densities)
+            densities = densities[0].view(-1, 1)  # = cat_features(densities)
             print("final whiten")
-            self.final_whiten.fit(densities[0].view(-1, 1), unit_range=True)  # rm
-            densities = self.final_whiten(densities[0].view(-1, 1))  # rm
+            self.final_whiten.fit(densities)
+            densities = self.final_whiten(densities)
 
         print("final detector")
         self.final_detector.fit(densities)
@@ -205,16 +203,17 @@ if __name__ == "__main__":
 
     print("data")
     data = mnist.load_data(n_train=20000, n_val=2000, device=device)
-    train_imgs = data[0][0]
+    train_X_pos = data[0][0]
 
     print("model")
-    trained_model = classifier.FullyConnected(train_imgs[0]).to(device)
+    trained_model = classifier.FullyConnected(train_X_pos[0]).to(device)
     train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
 
     print("detector")
-    n_centers = 2 + len(train_imgs) // 100
-    detector = DetectorNIC(train_imgs[0], trained_model, n_centers)
-    detector.fit(train_imgs, trained_model)
+    train_X_neg = train_X_pos.clone()
+    adversary.fgsm_(train_X_neg, data[1][1], trained_model, 0.2)
+    detector = NIC(train_X_pos[0], train_X_neg, trained_model, n_centers)
+    detector.fit(train_X_pos, train_X_neg, trained_model)
 
     print("fgsm")
     val_imgs_neg = data[1][0].clone()
@@ -251,7 +250,7 @@ if __name__ == "__main__":
 
     # print("nic")
     # nic = NIC(
-    #     train_imgs[0], trained_model, n_centers=2 + len(train_imgs) // 50
+    #     train_X_pos[0], trained_model, n_centers=2 + len(train_X_pos) // 50
     # ).fit(data, trained_model)
     # train.save(nic, "nic-onfc20k")
     # # train.load(nic, "nic-onfc20k-036721ae464e534d53585e0a62bf0ecc6c25405f")

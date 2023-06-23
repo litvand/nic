@@ -12,16 +12,16 @@ from train import Whiten
 def preprocess(n_train, X, y):
     perm = torch.randperm(len(X), device=X.device)
     X, y = X[perm], y[perm]
-    X_train, X_val, y_train, y_val = X[:n_train], X[n_train:], y[:n_train], y[n_train:]
+    train_X, val_X, train_y, val_y = X[:n_train], X[n_train:], y[:n_train], y[n_train:]
 
-    X_train_pos, X_train_neg = X_train[y_train], X_train[~y_train]
-    X_val_pos, X_val_neg = X_val[y_val], X_val[~y_val]
+    train_X_pos, train_X_neg = train_X[train_y], train_X[~train_y]
+    val_X_pos, val_X_neg = val_X[val_y], val_X[~val_y]
 
-    X_train_neg, X_val_neg = X_train_neg[: len(X_train_pos)], X_val_neg[: len(X_val_pos)]
+    train_X_neg, val_X_neg = train_X_neg[: len(train_X_pos)], val_X_neg[: len(val_X_pos)]
 
-    whiten = Whiten(X_train_pos[0]).fit(X_train_pos, zca=True)
+    whiten = Whiten(train_X_pos[0]).fit(train_X_pos, zca=True)
     return tuple(
-        None if len(X) == 0 else whiten(X) for X in (X_train_pos, X_train_neg, X_val_pos, X_val_neg)
+        None if len(X) == 0 else whiten(X) for X in (train_X_pos, train_X_neg, val_X_pos, val_X_neg)
     )
 
 
@@ -89,13 +89,13 @@ def hollow(n_train, n_val, device, n_dim=2):
     return preprocess(n_train, X, y)
 
 
-def save(X_train, X_val, y_val, name):
-    torch.save((X_train, X_val, y_val), f"data/{name}.pt")
+def save(train_X, val_X, val_y, name):
+    torch.save((train_X, val_X, val_y), f"data/{name}.pt")
 
 
 def load(name):
-    X_train, X_val, y_val = torch.load(f"data/{name}.pt")
-    return X_train, X_val, y_val
+    train_X, val_X, val_y = torch.load(f"data/{name}.pt")
+    return train_X, val_X, val_y
 
 
 # def _get_colors(outputs, min_output, max_output, channel):

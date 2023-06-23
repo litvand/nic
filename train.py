@@ -64,15 +64,15 @@ class Normalize(nn.Module):
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
         self.inv_scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
 
-    def fit(self, X_train, unit_range=False):
-        X_train = X_train.transpose(0, 1).flatten(1)  # Channel dimension first
+    def fit(self, train_X, unit_range=False):
+        train_X = train_X.transpose(0, 1).flatten(1)  # Channel dimension first
 
         if unit_range:  # Each channel in the range [0, 1] (in training data)
-            self.shift.copy_(X_train.min(1)[0])  # Min of each channel (in training data)
-            self.inv_scale.copy_(1.0 / (X_train.max(1)[0] - self.shift))
+            self.shift.copy_(train_X.min(1)[0])  # Min of each channel (in training data)
+            self.inv_scale.copy_(1.0 / (train_X.max(1)[0] - self.shift))
         else:
-            self.shift.copy_(X_train.mean(1))  # Mean of each channel
-            self.inv_scale.copy_(1.0 / X_train.std(1))
+            self.shift.copy_(train_X.mean(1))  # Mean of each channel
+            self.inv_scale.copy_(1.0 / train_X.std(1))
 
         return self
 
@@ -90,18 +90,18 @@ class Whiten(nn.Module):
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
         self.w = nn.Parameter(torch.zeros(n_features, n_features, device=d), requires_grad=False)
 
-    def fit(self, X_train, zca=True):
+    def fit(self, train_X, zca=True):
         """
-        NOTE: If X_train contains images, this calculates separate means for each pixel location.
+        NOTE: If train_X contains images, this calculates separate means for each pixel location.
 
-        X_train: Training inputs
+        train_X: Training inputs
         zca: True --> ZCA, False --> PCA
         """
 
-        X_train = X_train.flatten(1)
-        self.mean.copy_(X_train.mean(0))
+        train_X = train_X.flatten(1)
+        self.mean.copy_(train_X.mean(0))
 
-        cov = torch.cov((X_train - self.mean).T)
+        cov = torch.cov((train_X - self.mean).T)
         eig_vals, eig_vecs = linalg.eigh(cov)
         torch.mm(eig_vals.clamp(min=1e-6).rsqrt_().diag(), eig_vecs.T, out=self.w)
         if zca:
@@ -176,7 +176,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     init: Whether to initialize the net with random weights
     """
 
-    (X_train, y_train), (X_val, y_val) = data
+    (train_X, train_y), (val_X, val_y) = data
     net.train()
 
     # Restarts seem to increase accuracy on the original validation images, but
@@ -192,19 +192,19 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     min_val_optim_state = optimizer.state_dict() if restarts else None
 
     for epoch in range(n_epochs):
-        perm = torch.randperm(len(X_train))
-        X_train, y_train = X_train[perm], y_train[perm]
+        perm = torch.randperm(len(train_X))
+        train_X, train_y = train_X[perm], train_y[perm]
 
         if init and epoch == 0:
             # GPU memory must be large enough to evaluate all validation X without gradients,
             # so we can reuse that as an upper bound on the number of X to give to LSUV.
-            LSUV_(net, X_train[: len(X_val)])
+            LSUV_(net, train_X[: len(val_X)])
 
         loss = None
-        for i_x in range(0, len(X_train), batch_size):
-            batch_X = X_train[i_x : i_x + batch_size]
+        for i_x in range(0, len(train_X), batch_size):
+            batch_X = train_X[i_x : i_x + batch_size]
             batch_outputs = net(batch_X)
-            batch_y = y_train[i_x : i_x + batch_size]
+            batch_y = train_y[i_x : i_x + batch_size]
 
             loss = F.cross_entropy(batch_outputs, batch_y)
             optimizer.zero_grad(set_to_none=True)
@@ -214,14 +214,14 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
         with torch.no_grad():
             net.eval()
-            print(f"Epoch {epoch} ({len(X_train)//1000}k samples per epoch)")
+            print(f"Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
             print(f"Last batch loss {loss.item()}")
             eval.print_multi_acc(batch_outputs, batch_y, "Batch")
 
-            val_outputs = net(X_val)
-            val_loss = F.cross_entropy(val_outputs, y_val).item()
+            val_outputs = net(val_X)
+            val_loss = F.cross_entropy(val_outputs, val_y).item()
             print("Validation loss", val_loss)
-            eval.print_multi_acc(val_outputs, y_val, "Validation")
+            eval.print_multi_acc(val_outputs, val_y, "Validation")
 
             if val_loss <= min_val_loss:
                 min_val_loss = val_loss
