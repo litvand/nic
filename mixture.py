@@ -106,10 +106,10 @@ True positive rate, true negative rate: 99.59% 4.17%
 
 
 class DetectorKe(nn.Module):
-    def __init__(self, x_example, n_centers, equal_clusters=True, full_cov=True):
+    def __init__(self, example_x, n_centers, equal_clusters=True, full_cov=True):
         super().__init__()
 
-        n_features, dtype, device = len(x_example), x_example.dtype, x_example.device
+        n_features, dtype, device = len(example_x), example_x.dtype, example_x.device
         self.centers = nn.Parameter(torch.rand(n_centers, n_features, dtype=dtype, device=device))
 
         # OPTIM: Custom code for spherical clusters without full covariance
@@ -420,10 +420,10 @@ def true_negatives_threshold(densities_pos, densities_neg, min_acc_on_neg):
 
 
 class DetectorKmeans(nn.Module):
-    def __init__(self, x_example, n_centers):
+    def __init__(self, example_x, n_centers):
         super().__init__()
 
-        n_features, dtype, device = len(x_example), x_example.dtype, x_example.device
+        n_features, dtype, device = len(example_x), example_x.dtype, example_x.device
         self.centers = nn.Parameter(
             torch.empty(n_centers, n_features, dtype=dtype, device=device), requires_grad=False
         )

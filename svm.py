@@ -17,9 +17,12 @@ def hinge_loss(outputs, margin):
 
 
 class SVM(nn.Module):
-    def __init__(self, x_example):
+    def __init__(self, example_x):
         super().__init__()
-        self.linear = nn.Linear(len(x_example), 1).to(x_example.device)
+        self.linear = nn.Linear(len(example_x), 1).to(example_x.device)
+        with torch.no_grad():
+            self.linear.weight.fill_(1. / len(example_x))
+            self.linear.bias.fill_(0.)
 
     def forward(self, X):
         return self.linear(X).view(-1)

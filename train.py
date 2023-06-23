@@ -57,10 +57,10 @@ def activations_at(sequential, X, module_indices):
 
 
 class Normalize(nn.Module):
-    def __init__(self, x_example):
+    def __init__(self, example_x):
         super().__init__()
-        n_channels = len(x_example)
-        d = x_example.device
+        n_channels = len(example_x)
+        d = example_x.device
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
         self.inv_scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
 
@@ -83,10 +83,10 @@ class Normalize(nn.Module):
 
 
 class Whiten(nn.Module):
-    def __init__(self, x_example):
+    def __init__(self, example_x):
         super().__init__()
-        n_features = x_example.numel()
-        d = x_example.device
+        n_features = example_x.numel()
+        d = example_x.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
         self.w = nn.Parameter(torch.zeros(n_features, n_features, device=d), requires_grad=False)
 
