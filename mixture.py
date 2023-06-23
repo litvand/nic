@@ -519,16 +519,9 @@ class DetectorKmeans(nn.Module):
                     )
 
                 print(
-                    "density at (0., 0.), (0.01, 0.01), (0.1, 0.1)",
-                    round_tensor(self.density(torch.zeros(
-                        (1, 2), dtype=train_X_pos.dtype, device=train_X_pos.device 
-                    ))),
-                    round_tensor(self.density(torch.full(
-                        (1, 2), 0.01, dtype=train_X_pos.dtype, device=train_X_pos.device 
-                    ))),
-                    round_tensor(self.density(torch.full(
-                        (1, 2), 0.1, dtype=train_X_pos.dtype, device=train_X_pos.device 
-                    )))
+                    "density at train_X_neg[0], train_X_pos[0]",
+                    round_tensor(self.density(train_X_neg[:1])),
+                    round_tensor(self.density(train_X_pos[:1]))
                 )
                 if train_X_neg is not None:
                     # The arithmetic mean `(a+b)/2` gives surprisingly bad results, but sometimes
