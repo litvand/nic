@@ -17,19 +17,20 @@ def git_commit():
     """Can look at exact parameters and data that a model was trained on using the commit."""
 
     repo = git.Repo()
-    if repo.active_branch.name == "main":
-        # Don't clutter the main branch.
-        print("NOTE: No automated commit, because on main branch")
-    else:
-        repo.git.add(".")
-        repo.git.commit("-m", "_Automated commit")
+    if repo.is_dirty():
+        if repo.active_branch.name == "main":
+            # Don't clutter the main branch.
+            print("NOTE: No automated commit, because on main branch")
+        else:
+            repo.git.add(".")
+            repo.git.commit("-m", "_Automated commit")
 
     return repo.head.object.hexsha
 
 
 def save(model, model_name):
     last_commit = git_commit()
-    torch.save(model.cpu().state_dict(), f"models/{model_name}-{last_commit}.pt")
+    torch.save(model.state_dict(), f"models/{model_name}-{last_commit}.pt")
 
 
 def load(model, filename):

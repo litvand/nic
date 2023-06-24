@@ -9,7 +9,9 @@ import train
 from eval import acc, percent, round_tensor
 from mixture import DetectorKmeans
 from svm import SVM
+print("1")
 from train import logistic_regression, Normalize, Whiten
+print("2")
 
 
 def cat_layer_pairs(layers):
@@ -150,14 +152,15 @@ class NIC(nn.Module):
 
             self.final_detector = nn.Linear(len(densities), 1).to(X.device)
             self.final_detector.weight.fill_(1. / len(densities))
-            self.final_detector.bias.zero_()
+            self.final_detector.bias.fill_(len(densities))
 
     def forward(self, X, trained_model, i_layer=None):
         trained_model.eval()
 
         layers = [X] + trained_model.activations(X)
-        layers = [l.flatten(1) for l in layers]
-        layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
+        for w, l in zip(self.whiten, layers):
+            print("whiten, layer device", w.mean.device, l.device)
+        layers = [whiten(layer.flatten(1)) for whiten, layer in zip(self.whiten, layers)]
 
         densities = []
         for value_detector, layer in zip(self.value_detectors, layers):
@@ -185,9 +188,12 @@ class NIC(nn.Module):
 
         densities, densities_neg = [], []
         for value_detector, layer, layer_neg in zip(self.value_detectors, train_layers, layers_neg):
-            d, d_neg = value_detector.fit_predict(layer, layer_neg)
+            # d, d_neg = value_detector.fit_predict(layer, layer_neg)
+            # densities.append(d)
+            # densities_neg.append(d_neg)
+            d = value_detector.fit_predict(layer)
             densities.append(d)
-            densities_neg.append(d_neg)
+            densities_neg.append(value_detector(layer_neg))
 
         with torch.no_grad():
             densities = cat_features(densities)
@@ -197,15 +203,14 @@ class NIC(nn.Module):
             densities_neg = self.final_whiten(cat_features(densities_neg))
 
         is_adversarial = torch.zeros(
-            len(densities) + len(densities_neg), dtype=torch.uint8, device=densities.device
+            len(densities) + len(densities_neg), dtype=densities.dtype, device=densities.device
         )
-        is_adversarial[:len(densities)].fill_(1)
+        is_adversarial[:len(densities)].fill_(1.)
         densities = torch.cat((densities, densities_neg))
         regression_data = ((densities, is_adversarial), (None, None))
         logistic_regression(self.final_detector, regression_data, n_epochs=100)
         print("final detector params:", *self.final_detector.named_parameters())
         return self
-
 
 if __name__ == "__main__":
     torch.manual_seed(98765)
@@ -213,19 +218,29 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=5000, n_val=2000, device=device
+        n_train=2000, n_val=2, device=device
     )
 
     print("--- Model ---")
-    trained_model = classifier.PoolNet(train_X_pos[0]).to(device)
+    trained_model = classifier.PoolNet(train_X_pos[0])
     train.load(trained_model, "pool20k-1ce6321a452d629b14cf94ad9266ad584cd36e85")
+    trained_model.to(device)
 
     print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
-    detector = NIC(train_X_pos[0], trained_model, n_centers=1 + len(train_X_pos)//100)
+    n_centers = 1 + len(train_X_pos)//100
+    detector = NIC(train_X_pos[0], trained_model, n_centers).to(device)
     detector.fit(train_X_pos, train_X_neg, trained_model)
-    # train.save(detector, f"nic{n_centers}-onfc20k")
+    for m_name, module in detector.named_children():
+        for p_name, param in module.named_parameters():
+            print(m_name, p_name, param.data.device)
+    print(train_X_pos.device, train_y.device, val_X_pos.device, val_y.device)
+    print("whiten[0] mean device", detector.whiten[0].mean.device)
+    
+    train.save(detector, f"nic{n_centers}-onfc20k")
+    # train.load(detector, "nic201-onfc20k-27042213bc08bb1c699c2a37c52dc8115caa609d")
+    detector.to(device)
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
