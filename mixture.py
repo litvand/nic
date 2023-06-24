@@ -464,7 +464,7 @@ class DetectorKmeans(nn.Module):
         val_X_pos=None,
         val_X_neg=None,
         n_retries=4,
-        expected_acc=0.65
+        expected_acc=0.6
     ):
         """
         It can be better to leave train_X_neg=None. train_X_neg is only used to choose the
@@ -481,8 +481,8 @@ class DetectorKmeans(nn.Module):
                 kmeans_(self.centers, train_X_pos)
                 cluster_var_pr_(self.vars, self.prs, train_X_pos, self.centers)
 
-                train_densities_pos = self.density(train_X_pos)
-                nans = train_X_pos[train_densities_pos.isnan()]
+                train_densities = self.density(train_X_pos)
+                nans = train_X_pos[train_densities.isnan()]
                 if len(nans) > 0:
                     print(len(train_X_pos), "ERROR: nans", len(nans), nans)
                     print(
@@ -497,11 +497,13 @@ class DetectorKmeans(nn.Module):
                     # the geometric mean `sqrt(a*b)`or reciprocal mean `2 / (1/a + 1/b)` is better;
                     # maybe when it's the geometric mean of densities or the reciprocal mean of
                     # reciprocal distances.
+                    train_densities_neg = self.density(train_X_neg)
                     self.threshold.copy_(true_negatives_threshold(
-                        train_densities_pos, self.density(train_X_neg), expected_acc
+                        train_densities, train_densities_neg, expected_acc
                     ))
+                    train_densities = (train_densities, train_densities_neg)
                 else:
-                    self.threshold.copy_(train_densities_pos.min())
+                    self.threshold.copy_(train_densities.min())
 
                 if n_retries > 1 and val_X_pos is not None and val_X_neg is not None:
                     pos_acc = acc(self.density(val_X_pos) > self.threshold)
@@ -510,11 +512,13 @@ class DetectorKmeans(nn.Module):
                     if val_acc > best_acc:
                         params = all_params(self)
                         best_acc = val_acc
-                        best_densities = train_densities_pos
+                        best_densities = train_densities
                 else:
-                    best_densities = train_densities_pos
+                    best_densities = train_densities
 
         set_params(self, params)
+        if train_X_neg is not None:
+            return best_densities[0] - self.threshold, best_densities[1] - self.threshold
         return best_densities - self.threshold
 
 

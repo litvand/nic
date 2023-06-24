@@ -36,6 +36,7 @@ def load(model, filename):
     state_dict = torch.load(f"models/{filename}.pt")
     model.load_state_dict(state_dict)
 
+import gc
 
 def activations_at(sequential, X, module_indices):
     """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
@@ -43,6 +44,9 @@ def activations_at(sequential, X, module_indices):
     sequential = list(sequential.children())
     activations = []
     for i_module, module in enumerate(sequential):
+        gc.collect()
+        torch.cuda.empty_cache()
+
         X = module(X)
         # Support negative indices
         if i_module in module_indices or i_module - len(sequential) in module_indices:
@@ -171,13 +175,16 @@ def gradient_noise(model, i_x, initial_variance=0.01):
 
 def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     """
-    net: Should output logits for each class
+    net: Should output logits for each class (can be single logit for binary classification)
     data: Training and validation inputs and targets, where targets are class indices.
     init: Whether to initialize the net with random weights
     """
 
     (train_X, train_y), (val_X, val_y) = data
     net.train()
+    with torch.no_grad():
+        output_len = net(train_X[:1]).size(1)
+        loss_fn = F.cross_entropy if output_len > 1 else F.binary_cross_entropy_with_logits
 
     # Restarts seem to increase accuracy on the original validation images, but
     # decrease accuracy on adversarial validation images.
@@ -206,7 +213,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             batch_outputs = net(batch_X)
             batch_y = train_y[i_x : i_x + batch_size]
 
-            loss = F.cross_entropy(batch_outputs, batch_y)
+            loss = loss_fn(batch_outputs, batch_y)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             gradient_noise(net, i_x)
@@ -219,7 +226,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             eval.print_multi_acc(batch_outputs, batch_y, "Batch")
 
             val_outputs = net(val_X)
-            val_loss = F.cross_entropy(val_outputs, val_y).item()
+            val_loss = loss_fn(val_outputs, val_y).item()
             print("Validation loss", val_loss)
             eval.print_multi_acc(val_outputs, val_y, "Validation")
 

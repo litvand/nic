@@ -149,7 +149,7 @@ class NIC(nn.Module):
             self.final_whiten = Normalize(densities)
             self.final_detector = SVM(densities)
 
-    def forward(self, X, trained_model):
+    def forward(self, X, trained_model, i_layer=None):
         trained_model.eval()
 
         layers = [X] + trained_model.activations(X)
@@ -159,12 +159,12 @@ class NIC(nn.Module):
         densities = []
         for value_detector, layer in zip(self.value_detectors, layers):
             densities.append(value_detector(layer))
+        
+        if i_layer is not None:
+            # Detect based on a single layer
+            return densities[i_layer]
 
-        densities = self.final_whiten(cat_features(densities))
-        print("NIC.forward layer densities")
-        print([(round_tensor(densities[:, i].max()), round_tensor(densities[:, i].mean()), round_tensor(densities[:, i].min())) for i in range(densities.size(1))])
-
-        return self.final_detector(densities)
+        return self.final_detector(self.final_whiten(cat_features(densities)))
 
     def fit(self, train_X_pos, train_X_neg, trained_model):
         trained_model.eval()
@@ -176,26 +176,24 @@ class NIC(nn.Module):
                 whiten.fit(layer)
             train_layers = [whiten(layer) for whiten, layer in zip(self.whiten, train_layers)]
 
-        densities = []
-        for value_detector, layer in zip(self.value_detectors, train_layers):
-            densities.append(value_detector.fit_predict(layer))
+            layers_neg = [w(l.flatten(1)) for w, l in zip(
+                self.whiten, [train_X_neg] + trained_model.activations(train_X_neg)
+            )]
+
+        densities, densities_neg = [], []
+        for value_detector, layer, layer_neg in zip(self.value_detectors, train_layers, layers_neg):
+            d, d_neg = value_detector.fit_predict(layer, layer_neg)
+            densities.append(d)
+            densities_neg.append(d_neg)
 
         with torch.no_grad():
             densities = cat_features(densities)
             self.final_whiten.fit(densities)
             densities = self.final_whiten(densities)
 
-            layers_neg = [train_X_neg] + trained_model.activations(train_X_neg)
-            densities_neg = self.final_whiten(cat_features(
-                v(w(l.flatten(1))) for v, w, l in zip(self.value_detectors, self.whiten, layers_neg)
-            ))
+            densities_neg = self.final_whiten(cat_features(densities_neg))
 
-            print("NIC.fit layer densities")
-            print([(round_tensor(densities[:, i].max()), round_tensor(densities[:, i].mean()), round_tensor(densities[:, i].min())) for i in range(densities.size(1))])
-            print("neg")
-            print([(round_tensor(densities_neg[:, i].max()), round_tensor(densities_neg[:, i].mean()), round_tensor(densities_neg[:, i].min())) for i in range(densities_neg.size(1))])
-
-        self.final_detector.fit(densities, densities_neg, n_epochs=1000, margin=0.5, lr=0.1)
+        self.final_detector.fit(densities, densities_neg, n_epochs=1000, margin=1., lr=0.05)
         print("final detector params:", *self.final_detector.named_parameters())
         return self
 
@@ -204,41 +202,34 @@ if __name__ == "__main__":
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print("data")
+    print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=5000, n_val=2000, device=device
+        n_train=20000, n_val=2000, device=device
     )
 
-    print("model")
-    trained_model = classifier.FullyConnected(train_X_pos[0]).to(device)
-    train.load(trained_model, "fc20k-dc84d9b97f194b36c1130a5bc82eda5d69a57ad2")
+    print("--- Model ---")
+    trained_model = classifier.PoolNet(train_X_pos[0]).to(device)
+    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca")
 
-    print("detector")
+    print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
     detector = NIC(train_X_pos[0], trained_model, n_centers=1 + len(train_X_pos)//100)
     detector.fit(train_X_pos, train_X_neg, trained_model)
-    print(
-        "train acc",
-        percent(acc(detector(train_X_pos, trained_model) >= 0)),
-        percent(acc(detector(train_X_neg, trained_model) < 0))
-    )
+    # train.save(detector, f"nic{n_centers}-onfc20k")
+    with torch.no_grad():
+        print(
+            "train acc",
+            percent(acc(detector(train_X_pos, trained_model) >= 0)),
+            percent(acc(detector(train_X_neg, trained_model) < 0))
+        )
 
-    print("fgsm")
+    print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
     adversary.fgsm_(val_X_neg, val_y, trained_model, 0.2)
-    with torch.no_grad():
-        val_outputs_pos = detector(val_X_pos, trained_model)
-        val_outputs_neg = detector(val_X_neg, trained_model)
-    print(
-        "val outputs pos",
-        round_tensor(val_outputs_pos.max()),
-        round_tensor(val_outputs_pos.mean()),
-        round_tensor(val_outputs_pos.min()),
-        "neg",
-        round_tensor(val_outputs_neg.max()),
-        round_tensor(val_outputs_neg.mean()),
-        round_tensor(val_outputs_neg.min()),
-    )
-    print("val acc", percent(acc(val_outputs_pos >= 0)), percent(acc(val_outputs_neg < 0)))
-    # train.save(detector, f"nic{n_centers}-onfc20k")
+    for i_layer in [None] + list(range(len(detector.value_detectors))):
+        print("i_layer", i_layer)
+        with torch.no_grad():
+            val_outputs_pos = detector(val_X_pos, trained_model, i_layer)
+            val_outputs_neg = detector(val_X_neg, trained_model, i_layer)
+        print("val acc", percent(acc(val_outputs_pos >= 0)), percent(acc(val_outputs_neg < 0)))
