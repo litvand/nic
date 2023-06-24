@@ -183,7 +183,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     (train_X, train_y), (val_X, val_y) = data
     net.train()
     with torch.no_grad():
-        output_len = net(train_X[:1]).size(1)
+        output_len = net(train_X[:2]).size(1)
         loss_fn = F.cross_entropy if output_len > 1 else F.binary_cross_entropy_with_logits
 
     # Restarts seem to increase accuracy on the original validation images, but
@@ -205,7 +205,8 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
         if init and epoch == 0:
             # GPU memory must be large enough to evaluate all validation X without gradients,
             # so we can reuse that as an upper bound on the number of X to give to LSUV.
-            LSUV_(net, train_X[: len(val_X)])
+            n = len(val_X) if val_X is not None else batch_size
+            LSUV_(net, train_X[:n])
 
         loss_avg, coef_avg = 0., batch_size / len(train_X)
         loss = None
@@ -225,7 +226,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
         with torch.no_grad():
             net.eval()
             print(f"Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
-            print(f"Training loss running average {loss_avg()}")
+            print(f"Training loss running average {loss_avg}")
             eval.print_multi_acc(batch_outputs, batch_y, "Last batch")
 
             if val_X is not None:
