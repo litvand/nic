@@ -438,17 +438,13 @@ class DetectorKmeans(nn.Module):
         )
 
     def density(self, X):
-        diff_ij = ke.LazyTensor(X[:, None, :]) - ke.LazyTensor(self.centers[None, :, :])
-
         # Cauchy-like:
-        # return (1. / (ke.LazyTensor(self.vars[None, :, None]) + (diff_ij**2).sum(2))).matvec(
-        #     self.vars**2 * self.prs
-        # )
+        # d_ij = ke.Vi(X).sqdist(ke.Vj(self.centers)
+        # return (1. / (ke.Vj(self.vars[None, :]) + d_ij))).matvec(self.vars**2 * self.prs).view(-1)
 
         # Gaussian:
-        return (ke.Vi(X).weightedsqdist(
-            ke.Vj(self.centers.data), 1. / ke.LazyTensor(self.vars[None, :, None])
-        ) * -0.5).exp().matvec(self.prs).view(-1)
+        d_ij = ke.Vi(X).weightedsqdist(ke.Vj(self.centers), 1. / ke.Vj(self.vars[None, :]))
+        return (-0.5 * d_ij).exp().matvec(self.prs).view(-1)
 
     def forward(self, X):
         return self.density(X) - self.threshold

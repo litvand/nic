@@ -4,13 +4,12 @@ from torch import nn
 
 import adversary
 import classifier
-import data2d
 import mnist
 import train
 from eval import acc, percent, round_tensor
 from mixture import DetectorKmeans
 from svm import SVM
-from train import Normalize, Whiten
+from train import logistic_regression, Normalize, Whiten
 
 
 def cat_layer_pairs(layers):
@@ -145,9 +144,13 @@ class NIC(nn.Module):
             layers = [l.flatten(1) for l in layers]
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
             self.value_detectors = nn.ModuleList([DetectorKmeans(l[0], n_centers) for l in layers])
+            
             densities = torch.zeros(len(self.value_detectors), dtype=X.dtype, device=X.device)
             self.final_whiten = Normalize(densities)
-            self.final_detector = SVM(densities)
+
+            self.final_detector = nn.Linear(len(densities), 1)
+            self.final_detector.weight.fill_(1. / len(densities))
+            self.final_detector.bias.zero_()
 
     def forward(self, X, trained_model, i_layer=None):
         trained_model.eval()
@@ -164,7 +167,7 @@ class NIC(nn.Module):
             # Detect based on a single layer
             return densities[i_layer]
 
-        return self.final_detector(self.final_whiten(cat_features(densities)))
+        return self.final_detector(self.final_whiten(cat_features(densities))).view(-1)
 
     def fit(self, train_X_pos, train_X_neg, trained_model):
         trained_model.eval()
@@ -193,7 +196,14 @@ class NIC(nn.Module):
 
             densities_neg = self.final_whiten(cat_features(densities_neg))
 
-        self.final_detector.fit(densities, densities_neg, n_epochs=1000, margin=1., lr=0.05)
+
+        is_adversarial = torch.zeros(
+            len(densities) + len(densities_neg), dtype=torch.uint8, device=densities.device
+        )
+        is_adversarial[:len(densities)].fill_(1)
+        densities = torch.cat(densities, densities_neg)
+        regression_data = ((densities, is_adversarial), (None, None))
+        logistic_regression(self.final_detector, regression_data)
         print("final detector params:", *self.final_detector.named_parameters())
         return self
 

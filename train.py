@@ -194,9 +194,9 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, eps=0, min_lr=min_lr / 2, verbose=True
     )
-    min_val_loss = float("inf")
-    min_val_state = net.state_dict()  # Not worth deepcopying
-    min_val_optim_state = optimizer.state_dict() if restarts else None
+    min_loss = float("inf")
+    min_state = net.state_dict()  # Not worth deepcopying
+    min_optim_state = optimizer.state_dict() if restarts else None
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_X))
@@ -207,6 +207,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             # so we can reuse that as an upper bound on the number of X to give to LSUV.
             LSUV_(net, train_X[: len(val_X)])
 
+        loss_avg, coef_avg = 0., batch_size / len(train_X)
         loss = None
         for i_x in range(0, len(train_X), batch_size):
             batch_X = train_X[i_x : i_x + batch_size]
@@ -219,32 +220,37 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             gradient_noise(net, i_x)
             optimizer.step()
 
+            loss_avg = loss_avg * (1. - coef_avg) + loss.item() * coef_avg
+
         with torch.no_grad():
             net.eval()
             print(f"Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
-            print(f"Last batch loss {loss.item()}")
-            eval.print_multi_acc(batch_outputs, batch_y, "Batch")
+            print(f"Training loss running average {loss_avg()}")
+            eval.print_multi_acc(batch_outputs, batch_y, "Last batch")
 
-            val_outputs = net(val_X)
-            val_loss = loss_fn(val_outputs, val_y).item()
-            print("Validation loss", val_loss)
-            eval.print_multi_acc(val_outputs, val_y, "Validation")
+            if val_X is not None:
+                val_outputs = net(val_X)
+                loss = loss_fn(val_outputs, val_y).item()
+                print("Validation loss:", loss)
+                eval.print_multi_acc(val_outputs, val_y, "Validation")
+            else:
+                loss = loss_avg
 
-            if val_loss <= min_val_loss:
-                min_val_loss = val_loss
-                min_val_state = deepcopy(net.state_dict())
-                min_val_optim_state = deepcopy(optimizer.state_dict()) if restarts else None
+            if loss <= min_loss:
+                min_loss = loss
+                min_state = deepcopy(net.state_dict())
+                min_optim_state = deepcopy(optimizer.state_dict()) if restarts else None
 
             prev_lr = optimizer.param_groups[0]["lr"]
-            scheduler.step(val_loss)
+            scheduler.step(loss)
             if all(g["lr"] < min_lr for g in optimizer.param_groups):
                 break
             elif restarts and optimizer.param_groups[0]["lr"] < prev_lr:
-                net.load_state_dict(min_val_state)
+                net.load_state_dict(min_state)
                 # Reset optimizer state, but not learning rate
-                min_val_optim_state["param_groups"] = optimizer.param_groups
-                optimizer.load_state_dict(min_val_optim_state)
+                min_optim_state["param_groups"] = optimizer.param_groups
+                optimizer.load_state_dict(min_optim_state)
 
             net.train()
-    net.load_state_dict(min_val_state)
+    net.load_state_dict(min_state)
     net.eval()
