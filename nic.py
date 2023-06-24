@@ -148,7 +148,7 @@ class NIC(nn.Module):
             densities = torch.zeros(len(self.value_detectors), dtype=X.dtype, device=X.device)
             self.final_whiten = Normalize(densities)
 
-            self.final_detector = nn.Linear(len(densities), 1)
+            self.final_detector = nn.Linear(len(densities), 1).to(X.device)
             self.final_detector.weight.fill_(1. / len(densities))
             self.final_detector.bias.zero_()
 
@@ -196,14 +196,13 @@ class NIC(nn.Module):
 
             densities_neg = self.final_whiten(cat_features(densities_neg))
 
-
         is_adversarial = torch.zeros(
             len(densities) + len(densities_neg), dtype=torch.uint8, device=densities.device
         )
         is_adversarial[:len(densities)].fill_(1)
-        densities = torch.cat(densities, densities_neg)
+        densities = torch.cat((densities, densities_neg))
         regression_data = ((densities, is_adversarial), (None, None))
-        logistic_regression(self.final_detector, regression_data)
+        logistic_regression(self.final_detector, regression_data, n_epochs=100)
         print("final detector params:", *self.final_detector.named_parameters())
         return self
 
@@ -214,12 +213,12 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=20000, n_val=2000, device=device
+        n_train=5000, n_val=2000, device=device
     )
 
     print("--- Model ---")
     trained_model = classifier.PoolNet(train_X_pos[0]).to(device)
-    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca")
+    train.load(trained_model, "pool20k-1ce6321a452d629b14cf94ad9266ad584cd36e85")
 
     print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
@@ -227,12 +226,6 @@ if __name__ == "__main__":
     detector = NIC(train_X_pos[0], trained_model, n_centers=1 + len(train_X_pos)//100)
     detector.fit(train_X_pos, train_X_neg, trained_model)
     # train.save(detector, f"nic{n_centers}-onfc20k")
-    with torch.no_grad():
-        print(
-            "train acc",
-            percent(acc(detector(train_X_pos, trained_model) >= 0)),
-            percent(acc(detector(train_X_neg, trained_model) < 0))
-        )
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
@@ -240,6 +233,11 @@ if __name__ == "__main__":
     for i_layer in [None] + list(range(len(detector.value_detectors))):
         print("i_layer", i_layer)
         with torch.no_grad():
+            print(
+                "train acc",
+                percent(acc(detector(train_X_pos, trained_model, i_layer) >= 0)),
+                percent(acc(detector(train_X_neg, trained_model, i_layer) < 0))
+            )
             val_outputs_pos = detector(val_X_pos, trained_model, i_layer)
             val_outputs_neg = detector(val_X_neg, trained_model, i_layer)
         print("val acc", percent(acc(val_outputs_pos >= 0)), percent(acc(val_outputs_neg < 0)))

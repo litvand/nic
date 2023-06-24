@@ -129,10 +129,10 @@ def cmp_single(i_img, imgs, y, trained_model, eps):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    _, (imgs, y) = mnist.load_data(n_train=22000, n_val=5000, device=device)
+    _, (imgs, y) = mnist.load_data(n_train=20000, n_val=2000, device=device)
 
     net = classifier.PoolNet(imgs[0]).to(device)
-    train.load(net, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca")
+    train.load(net, "pool20k-1ce6321a452d629b14cf94ad9266ad584cd36e85")
     net.eval()
     with torch.no_grad():
         eval.print_multi_acc(net(imgs), y, "Original")

@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, linalg
 
-import eval
+from eval import acc, percent, print_multi_acc
 from lsuv import LSUV_
 
 # FullyConnected, 50k training images, 0.984 max validation accuracy
@@ -183,8 +183,20 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     (train_X, train_y), (val_X, val_y) = data
     net.train()
     with torch.no_grad():
-        output_len = net(train_X[:2]).size(1)
-        loss_fn = F.cross_entropy if output_len > 1 else F.binary_cross_entropy_with_logits
+        binary = net(train_X[:2]).size(1) == 1
+        if binary:
+            train_y = train_y.to(train_X.dtype)
+            val_y = val_y.to(val_X.dtype) if val_y is not None else val_y
+
+            net_fn = lambda X: net(X).view(-1)
+            loss_fn = F.binary_cross_entropy_with_logits
+            print_acc = lambda o, y, name: print(
+                f"{name} accuracy:", percent(acc((o >= 0.) == (y >= 0.)))
+            )
+        else:
+            net_fn = net
+            loss_fn = F.cross_entropy
+            print_acc = print_multi_acc
 
     # Restarts seem to increase accuracy on the original validation images, but
     # decrease accuracy on adversarial validation images.
@@ -212,7 +224,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
         loss = None
         for i_x in range(0, len(train_X), batch_size):
             batch_X = train_X[i_x : i_x + batch_size]
-            batch_outputs = net(batch_X)
+            batch_outputs = net_fn(batch_X)
             batch_y = train_y[i_x : i_x + batch_size]
 
             loss = loss_fn(batch_outputs, batch_y)
@@ -227,13 +239,13 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             net.eval()
             print(f"Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
             print(f"Training loss running average {loss_avg}")
-            eval.print_multi_acc(batch_outputs, batch_y, "Last batch")
+            print_acc(batch_outputs, batch_y, "Last batch")
 
             if val_X is not None:
-                val_outputs = net(val_X)
+                val_outputs = net_fn(val_X)
                 loss = loss_fn(val_outputs, val_y).item()
                 print("Validation loss:", loss)
-                eval.print_multi_acc(val_outputs, val_y, "Validation")
+                print_acc(val_outputs, val_y, "Validation")
             else:
                 loss = loss_avg
 

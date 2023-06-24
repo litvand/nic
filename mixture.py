@@ -439,11 +439,11 @@ class DetectorKmeans(nn.Module):
 
     def density(self, X):
         # Cauchy-like:
-        # d_ij = ke.Vi(X).sqdist(ke.Vj(self.centers)
-        # return (1. / (ke.Vj(self.vars[None, :]) + d_ij))).matvec(self.vars**2 * self.prs).view(-1)
+        # d_ij = ke.Vi(X).sqdist(ke.Vj(self.centers.data)
+        # return (1. / (ke.Vj(self.vars[:, None]) + d_ij))).matvec(self.vars**2 * self.prs).view(-1)
 
         # Gaussian:
-        d_ij = ke.Vi(X).weightedsqdist(ke.Vj(self.centers), 1. / ke.Vj(self.vars[None, :]))
+        d_ij = ke.Vi(X).weightedsqdist(ke.Vj(self.centers.data), 1. / ke.Vj(self.vars[:, None]))
         return (-0.5 * d_ij).exp().matvec(self.prs).view(-1)
 
     def forward(self, X):
@@ -474,8 +474,8 @@ class DetectorKmeans(nn.Module):
         best_densities = None
         with torch.no_grad():
             for _ in range(n_retries):
-                kmeans_(self.centers, train_X_pos)
-                cluster_var_pr_(self.vars, self.prs, train_X_pos, self.centers)
+                kmeans_(self.centers.data, train_X_pos)
+                cluster_var_pr_(self.vars.data, self.prs.data, train_X_pos, self.centers.data)
 
                 train_densities = self.density(train_X_pos)
                 nans = train_X_pos[train_densities.isnan()]
