@@ -444,7 +444,7 @@ class DetectorKmeans(nn.Module):
 
         # Gaussian:
         d_ij = ke.Vi(X).weightedsqdist(ke.Vj(self.centers.data), 1. / ke.Vj(self.vars[:, None]))
-        return (-0.5 * d_ij).exp().matvec(self.prs).view(-1)
+        return (-0.5 * d_ij).logsumexp(dim=1, weight=ke.Vj(self.prs[:, None])).view(-1)
 
     def forward(self, X):
         return self.density(X) - self.threshold

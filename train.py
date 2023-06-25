@@ -69,15 +69,22 @@ class Normalize(nn.Module):
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
         self.inv_scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
 
-    def fit(self, train_X, unit_range=False):
-        train_X = train_X.transpose(0, 1).flatten(1)  # Channel dimension first
-
-        if unit_range:  # Each channel in the range [0, 1] (in training data)
-            self.shift.copy_(train_X.min(1)[0])  # Min of each channel (in training data)
-            self.inv_scale.copy_(1.0 / (train_X.max(1)[0] - self.shift))
+    def fit(self, train_X, unit_range=False, scalar=False):
+        if scalar:
+            # Average over all data -- single fake channel
+            train_X = train_X.view(1, -1)
         else:
+            # Average over each channel -- channel dimension first
+            train_X = train_X.transpose(0, 1).flatten(1)
+
+        if unit_range:
+            # Each channel in the range [0, 1] (in training data)
+            self.shift.copy_(train_X.min(1)[0])  # Min of each channel (in training data)
+            self.inv_scale.copy_(1. / (train_X.max(1)[0] - self.shift))
+        else:
+            # Each channel normally distributed
             self.shift.copy_(train_X.mean(1))  # Mean of each channel
-            self.inv_scale.copy_(1.0 / train_X.std(1))
+            self.inv_scale.copy_(1. / train_X.std(1))
 
         return self
 

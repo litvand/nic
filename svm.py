@@ -55,7 +55,7 @@ class SVM(nn.Module):
         self,
         train_X_pos,
         verbose=False,
-        perfect_train=False,
+        perfect_train=True,
         n_epochs=1000,
         margin=1.
     ):

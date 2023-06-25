@@ -109,12 +109,12 @@ def kmeans_(centers, train_X, accuracy=0.9999):
     kmeans_lloyd_(centers, train_X, accuracy)
 
 
-def cluster_var_pr_(var, pr, train_X, centers, min_var=1e-8):
+def cluster_var_pr_(vars, prs, train_X, centers, min_var=1e-8):
     """
-    Overwrites `var` and `pr`
+    Overwrites `vars` and `prs`
 
-    var: Variance for each cluster (n_centers)
-    pr: Probability of each cluster (n_centers)
+    vars: Variance for each cluster (n_centers)
+    prs: Probability of each cluster (n_centers)
     train_X: Training points (n_points, n_features)
     centers: Center of each cluster (n_centers, n_features)
     min_var: Variance of a cluster with a single point
@@ -125,11 +125,12 @@ def cluster_var_pr_(var, pr, train_X, centers, min_var=1e-8):
     dist_i, j_center_from_i = dist_i.view(len(train_X)), j_center_from_i.view(len(train_X))
 
     # for j in range(len(centers)):
-    #     var[j] = dist_i[j_center_from_i == j].mean()
-    var.scatter_reduce_(0, j_center_from_i, dist_i, reduce="mean", include_self=False)
-    var += min_var
+    #     vars[j] = dist_i[j_center_from_i == j].mean()
+    vars.scatter_reduce_(0, j_center_from_i, dist_i, reduce="mean", include_self=False)
+    vars *= 1.2
+    vars += min_var
 
-    torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(train_X)), out=pr)
+    torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(train_X)), out=prs)
 
 
 def bench():

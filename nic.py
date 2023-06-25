@@ -69,7 +69,7 @@ def cat_features(features):
 #         densities = torch.empty(1, dtype=dtype, device=device).expand(
 #             len(self.value_detectors) + len(self.prov_detectors)
 #         )
-#         self.final_whiten = Whiten(densities)
+#         self.final_normalize = Whiten(densities)
 #         self.final_detector = DetectorKmeans(densities, n_centers)
 #         print("inited nic")
 
@@ -86,7 +86,7 @@ def cat_features(features):
 #         prov_densities = self.prov_detectors(cat_layer_pairs(layer_logits))
 
 #         densities = cat_features(value_densities + prov_densities)
-#         return self.final_detector(self.final_whiten(densities))
+#         return self.final_detector(self.final_normalize(densities))
 
 #     def fit(self, data, trained_model):
 #         (train_X_pos, train_targets), (val_imgs, val_targets) = data
@@ -118,8 +118,8 @@ def cat_features(features):
 #         print("Final whiten")
 #         with torch.no_grad():
 #             train_densities = cat_features(train_value_densities + train_prov_densities)
-#             self.final_whiten = Whiten(train_densities[0]).fit(train_densities)
-#             train_densities = self.final_whiten(train_densities)
+#             self.final_normalize = Whiten(train_densities[0]).fit(train_densities)
+#             train_densities = self.final_normalize(train_densities)
 
 #         self.final_detector = DetectorKmeans(train_densities[0], n_centers).fit(train_densities)
 #         return self
@@ -135,31 +135,44 @@ class NIC(nn.Module):
                     `trained_model`. Must have `activations` method that returns activations of
                     last layer and optionally activations of some earlier layers.
     """
+    detector_types = ["kmeans", "svm"]
+    final_types = ["vote", "logistic", "svm"]
 
-    def __init__(self, example_x, trained_model, n_centers):
+    def __init__(
+        self, example_x, trained_model, n_centers, detector_type="kmeans", final_type="vote"
+    ):
         super().__init__()
         X = example_x.unsqueeze(0)
         trained_model.eval()
+        self.final_type = final_type
+        self.detector_type = detector_type
+        assert final_type in NIC.final_types, (final_type, NIC.final_types)
+        assert detector_type in NIC.detector_types, (detector_type, NIC.detector_types)
 
         with torch.no_grad():
             layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
-            self.value_detectors = nn.ModuleList([DetectorKmeans(l[0], n_centers) for l in layers])
+            
+            k = detector_type == "kmeans"
+            self.value_detectors = nn.ModuleList([
+                DetectorKmeans(l[0], n_centers) if k else SVM(l[0]) for l in layers
+            ])
             
             densities = torch.zeros(len(self.value_detectors), dtype=X.dtype, device=X.device)
-            self.final_whiten = Normalize(densities)
+            self.final_normalize = Normalize(densities)
 
-            self.final_detector = nn.Linear(len(densities), 1).to(X.device)
-            self.final_detector.weight.fill_(1. / len(densities))
-            self.final_detector.bias.fill_(len(densities))
+            if final_type in ["vote", "logistic"]:
+                self.final_detector = nn.Linear(len(densities), 1).to(X.device)
+            elif final_type == "svm":
+                self.final_detector = SVM(densities)
+            else:
+                assert False, "unreachable"
 
     def forward(self, X, trained_model, i_layer=None):
         trained_model.eval()
 
         layers = [X] + trained_model.activations(X)
-        for w, l in zip(self.whiten, layers):
-            print("whiten, layer device", w.mean.device, l.device)
         layers = [whiten(layer.flatten(1)) for whiten, layer in zip(self.whiten, layers)]
 
         densities = []
@@ -170,7 +183,7 @@ class NIC(nn.Module):
             # Detect based on a single layer
             return densities[i_layer]
 
-        return self.final_detector(self.final_whiten(cat_features(densities))).view(-1)
+        return self.final_detector(self.final_normalize(cat_features(densities))).view(-1)
 
     def fit(self, train_X_pos, train_X_neg, trained_model):
         trained_model.eval()
@@ -191,25 +204,42 @@ class NIC(nn.Module):
             # d, d_neg = value_detector.fit_predict(layer, layer_neg)
             # densities.append(d)
             # densities_neg.append(d_neg)
-            d = value_detector.fit_predict(layer)
+            if self.detector_type == "kmeans":
+                d = value_detector.fit_predict(layer)
+            else:
+                value_detector.fit_one_class(layer)
+                d = value_detector(layer)
             densities.append(d)
             densities_neg.append(value_detector(layer_neg))
+        
+        if self.final_type == "vote":
+            with torch.no_grad():
+                for d_neg in densities_neg:
+                    self.final_detector.weight.copy_((acc(d_neg < 0.) - 0.5).clamp(min=0.))
+                self.final_detector.bias.copy_(0.)
+            return self
 
         with torch.no_grad():
             densities = cat_features(densities)
-            self.final_whiten.fit(densities)
-            densities = self.final_whiten(densities)
+            self.final_normalize.fit(densities)
+            densities = self.final_normalize(densities)
 
-            densities_neg = self.final_whiten(cat_features(densities_neg))
+            densities_neg = self.final_normalize(cat_features(densities_neg))
 
-        is_adversarial = torch.zeros(
-            len(densities) + len(densities_neg), dtype=densities.dtype, device=densities.device
-        )
-        is_adversarial[:len(densities)].fill_(1.)
-        densities = torch.cat((densities, densities_neg))
-        regression_data = ((densities, is_adversarial), (None, None))
-        logistic_regression(self.final_detector, regression_data, n_epochs=100)
-        print("final detector params:", *self.final_detector.named_parameters())
+        if self.final_type == "logistic":
+            is_adversarial = torch.zeros(
+                len(densities) + len(densities_neg), dtype=densities.dtype, device=densities.device
+            )
+            is_adversarial[:len(densities)].fill_(1.)
+            densities = torch.cat((densities, densities_neg))
+            regression_data = ((densities, is_adversarial), (None, None))
+            with torch.no_grad():
+                self.final_detector.weight.fill_(1. / densities.size(1))
+                self.final_detector.bias.copy_(0.5 * densities.size(1))
+            logistic_regression(self.final_detector, regression_data, n_epochs=100)
+            return self
+        
+        self.final_detector.fit(densities, densities_neg)
         return self
 
 if __name__ == "__main__":
@@ -218,7 +248,7 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=2000, n_val=2, device=device
+        n_train=2000, n_val=2000, device=device
     )
 
     print("--- Model ---")
@@ -229,18 +259,12 @@ if __name__ == "__main__":
     print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
-    n_centers = 1 + len(train_X_pos)//100
-    detector = NIC(train_X_pos[0], trained_model, n_centers).to(device)
-    detector.fit(train_X_pos, train_X_neg, trained_model)
-    for m_name, module in detector.named_children():
-        for p_name, param in module.named_parameters():
-            print(m_name, p_name, param.data.device)
-    print(train_X_pos.device, train_y.device, val_X_pos.device, val_y.device)
-    print("whiten[0] mean device", detector.whiten[0].mean.device)
-    
-    train.save(detector, f"nic{n_centers}-onfc20k")
-    # train.load(detector, "nic201-onfc20k-27042213bc08bb1c699c2a37c52dc8115caa609d")
-    detector.to(device)
+    n_centers = 201 #1 + len(train_X_pos)//100
+    detector = NIC(train_X_pos[0], trained_model, n_centers)
+    # detector.fit(train_X_pos, train_X_neg, trained_model)
+    # train.save(detector, f"nic{n_centers}-onpool20k")
+    train.load(detector, "nic201-onpool20k-9b780bcba9d76f8ffb7191214e84378bcbf6ece7")
+    print("final_detector weight", detector.final_detector.weight)
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
