@@ -38,18 +38,12 @@ def load(model, filename):
     model.load_state_dict(state_dict)
 
 
-import gc
-
-
 def activations_at(sequential, X, module_indices):
     """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
 
     sequential = list(sequential.children())
     activations = []
     for i_module, module in enumerate(sequential):
-        gc.collect()
-        torch.cuda.empty_cache()
-
         X = module(X)
         # Support negative indices
         if i_module in module_indices or i_module - len(sequential) in module_indices:
@@ -183,7 +177,7 @@ def gradient_noise(model, i_x, initial_variance=0.01):
             param.grad.add_(torch.randn_like(param.grad), alpha=std)
 
 
-def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
+def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_epochs=1000):
     """
     net: Should output logits for each class (can be single logit for binary classification)
     data: Training and validation inputs and targets, where targets are class indices.
@@ -247,15 +241,9 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
         with torch.no_grad():
             net.eval()
-            print(f"Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
-            print(f"Training loss running average {loss_avg}")
-            print_acc(batch_outputs, batch_y, "Last batch")
-
             if val_X is not None:
                 val_outputs = net_fn(val_X)
                 loss = loss_fn(val_outputs, val_y).item()
-                print("Validation loss:", loss)
-                print_acc(val_outputs, val_y, "Validation")
             else:
                 loss = loss_avg
 
@@ -266,9 +254,20 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
 
             prev_lr = optimizer.param_groups[0]["lr"]
             scheduler.step(loss)
+            was_plateau = optimizer.param_groups[0]["lr"] < prev_lr
+            
+            if verbose or was_plateau:
+                print(f"Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
+                print(f"Training loss running average {loss_avg}")
+                print_acc(batch_outputs, batch_y, "Last batch")
+                if val_X is not None:
+                    print("Validation loss:", loss)
+                    print_acc(val_outputs, val_y, "Validation")
+
             if all(g["lr"] < min_lr for g in optimizer.param_groups):
                 break
-            elif restarts and optimizer.param_groups[0]["lr"] < prev_lr:
+
+            if restarts and was_plateau:
                 net.load_state_dict(min_state)
                 # Reset optimizer state, but not learning rate
                 # min_optim_state["param_groups"] = optimizer.param_groups
