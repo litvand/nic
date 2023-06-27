@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import torch
 from torch import nn
+from sklearn.kernel_approximation import Nystroem
+from sklearn.linear_model import SGDOneClassSVM
 
 import adversary
 import classifier
@@ -10,6 +12,26 @@ from eval import acc, percent, print_balanced_acc, round_tensor
 from mixture import DetectorKmeans
 from svm import SVM
 from train import logistic_regression, Normalize, Whiten
+
+
+class SkSVM():
+    def __init__(self, n_centers=None):
+        self.nystroem = None if n_centers is None else Nystroem(n_components=n_centers)
+        self.svm = SGDOneClassSVM()
+    
+    def fit_predict(self, X):
+        dtype, device = X.dtype, X.device
+        X = X.detach().cpu().numpy()
+        if self.nystroem is not None:
+            X = self.nystroem.fit_transform(X)
+        return torch.tensor(self.svm.fit_predict(X), dtype=dtype, device=device)
+
+    def __call__(self, X):
+        dtype, device = X.dtype, X.device
+        X = X.detach().cpu().numpy()
+        if self.nystroem is not None:
+            X = self.nystroem.transform(X)
+        return torch.tensor(self.svm.predict(X), dtype=dtype, device=device)
 
 
 def cat_layer_pairs(layers):
@@ -48,6 +70,15 @@ def cat_features(features):
     return torch.cat([f.unsqueeze(1) for f in features], dim=1)
 
 
+def fit_detectors(detectors, layers, layers_neg, _detector_type):
+    densities, densities_neg = [], []
+    for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
+        densities.append(detector.fit_predict(layer))
+        densities_neg.append(detector(layer_neg))
+        
+    return densities, densities_neg
+
+
 class NIC(nn.Module):
     """
     Higher output means a higher probability of the image being within the training
@@ -79,9 +110,11 @@ class NIC(nn.Module):
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
 
             k = detector_type == "kmeans"
-            self.value_detectors = nn.ModuleList()
+            self.value_detectors = [] #nn.ModuleList()
             for l in layers:
-                self.value_detectors.append(DetectorKmeans(l[0], n_centers) if k else SVM(l[0]))
+                self.value_detectors.append(
+                    DetectorKmeans(l[0], n_centers) if k else SkSVM(n_centers)
+                )
             
             # Last layer already contains logits from trained model, so there's no need to use a
             # classifier. Last layer is also a transformation of the second-to-last layer, so it
@@ -93,9 +126,11 @@ class NIC(nn.Module):
             )
 
             pair = torch.cat((logits, logits))
-            self.prov_detectors = nn.ModuleList()
+            self.prov_detectors = [] #nn.ModuleList()
             for _ in self.classifiers:
-                self.prov_detectors.append(DetectorKmeans(pair, n_centers) if k else SVM(pair))
+                self.prov_detectors.append(
+                    DetectorKmeans(l[0], n_centers) if k else SkSVM(n_centers)
+                )
 
             densities = torch.zeros(1, dtype=X.dtype, device=X.device).expand(
                 len(self.value_detectors) + len(self.prov_detectors)
@@ -104,7 +139,7 @@ class NIC(nn.Module):
             if final_type in ["vote", "logistic"]:
                 self.final_detector = nn.Linear(len(densities), 1).to(X.device)
             elif final_type == "svm":
-                self.final_detector = SVM(densities)
+                self.final_detector = SkSVM(None)
             else:
                 assert False, "unreachable"
 
@@ -114,7 +149,9 @@ class NIC(nn.Module):
         layers = whitened_layers(self.whiten, X, trained_model)
         value_densities = [v(l) for v, l in zip(self.value_detectors, layers)]
         logits = [c(l) for c, l in zip(self.classifiers, layers[:-2])] + [layers[-1]]
-        prov_densities = [p(l) for p, l in zip(self.prov_detectors, cat_layer_pairs(logits))]
+        prov_densities = [
+            p(l) for p, l in zip(self.prov_detectors, cat_layer_pairs(logits))
+        ]
 
         densities = value_densities + prov_densities
         densities.append(
@@ -137,51 +174,35 @@ class NIC(nn.Module):
         trained_model.eval()
 
         with torch.no_grad():
-            train_layers = [train_X_pos] + trained_model.activations(train_X_pos)
-            train_layers = [l.flatten(1) for l in train_layers]
-            for whiten, layer in zip(self.whiten, train_layers):
+            layers = [train_X_pos] + trained_model.activations(train_X_pos)
+            layers = [l.flatten(1) for l in layers]
+            for whiten, layer in zip(self.whiten, layers):
                 whiten.fit(layer)
-            train_layers = [whiten(layer) for whiten, layer in zip(self.whiten, train_layers)]
+            layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
 
             layers_neg = whitened_layers(self.whiten, train_X_neg, trained_model)
 
         print("--- Value detectors ---")
-        value_densities, value_densities_neg = [], []
-        for value_detector, layer, layer_neg in zip(self.value_detectors, train_layers, layers_neg):
-            if self.detector_type == "kmeans":
-                d = value_detector.fit_predict(layer)
-                # d, d_neg = value_detector.fit_predict(layer, layer_neg)
-                # value_densities_neg.append(d_neg)
-            else:
-                value_detector.fit_one_class(layer)
-                d = value_detector(layer)
-            value_densities.append(d)
-            value_densities_neg.append(value_detector(layer_neg))
+        value_densities, value_densities_neg = fit_detectors(
+            self.value_detectors, layers, layers_neg, self.detector_type
+        )
         
         print("--- NIC classifiers ---")
         logits, logits_neg = [], []
-        for classifier, layer, layer_neg in zip(self.classifiers, train_layers, layers_neg):
+        for classifier, layer, layer_neg in zip(self.classifiers, layers, layers_neg):
             data = ((layer, train_y), (None, None))
-            logistic_regression(classifier, data, init=True)
+            logistic_regression(classifier, data, init=True, n_epochs=100)
             logits.append(classifier(layer))
             logits_neg.append(classifier(layer_neg))
         
-        logits.append(train_layers[-1])
+        logits.append(layers[-1])
         logits_neg.append(layers_neg[-1])
         pairs, pairs_neg = cat_layer_pairs(logits), cat_layer_pairs(logits_neg)
         
         print("--- Provenance detectors ---")
-        prov_densities, prov_densities_neg = [], []
-        for prov_detector, pair, pair_neg in zip(self.prov_detectors, pairs, pairs_neg):
-            if self.detector_type == "kmeans":
-                d = prov_detector.fit_predict(pair)
-                # d, d_neg = prov_detector.fit_predict(pair, pair_neg)
-                # prov_densities_neg.append(d_neg)
-            else:
-                prov_detector.fit_one_class(pair)
-                d = prov_detector(pair)
-            prov_densities.append(d)
-            prov_densities_neg.append(prov_detector(pair_neg))
+        prov_densities, prov_densities_neg = fit_detectors(
+            self.prov_detectors, pairs, pairs_neg, self.detector_type
+        )
         
         print("--- NIC final ---")
         densities = value_densities + prov_densities
@@ -201,7 +222,7 @@ class NIC(nn.Module):
 
         with torch.no_grad():
             densities = cat_features(densities)
-            self.final_normalize.fit(densities)
+            self.final_normalize.fit(densities, scalar=True)
             densities = self.final_normalize(densities)
 
             densities_neg = self.final_normalize(cat_features(densities_neg))
@@ -219,10 +240,10 @@ class NIC(nn.Module):
                 self.final_detector.weight.fill_(1. / densities.size(1))
                 self.final_detector.bias.copy_(0.5 * densities.size(1))
 
-            logistic_regression(self.final_detector, regression_data)
+            logistic_regression(self.final_detector, regression_data, n_epochs=100)
             return self
 
-        self.final_detector.fit_one_class(densities)
+        self.final_detector.fit_predict(densities)
         return self
 
 
@@ -237,16 +258,18 @@ if __name__ == "__main__":
 
     print("--- Model ---")
     trained_model = classifier.PoolNet(train_X_pos[0])
-    train.load(trained_model, "pool20k-1ce6321a452d629b14cf94ad9266ad584cd36e85")
+    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca")
     trained_model.to(device)
 
     print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
     n_centers = 1 + len(train_X_pos) // 100
-    detector = NIC(train_X_pos[0], trained_model, n_centers)
+    detector = NIC(
+        train_X_pos[0], trained_model, n_centers, detector_type="svm", final_type="svm"
+    )
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
-    train.save(detector, f"nic{n_centers}-onpool20k")
+    train.save(detector, f"nic{n_centers}-svm-onnorestart20k")
     # train.load(detector, "nic201-onpool20k-ce97eb7455a89a045849b0ccd55c3e6a3bc62763")
 
     print("--- Validation ---")
@@ -263,3 +286,40 @@ if __name__ == "__main__":
             print("i_detector", i_detector)
             print_balanced_acc(train_a_pos[i_detector], train_a_neg[i_detector], "Training")
             print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")
+
+"""
+Sklearn SVM (value detectors, provenance detectors and final detector) on PoolNet 20k/2k:
+--- Validation ---
+Index of first provenance detector: 5
+i_detector 0
+Training balanced accuracy; true positives and negatives: 75.12% 50.26% 99.97%
+Validation balanced accuracy; true positives and negatives: 75.3% 50.65% 99.95%
+i_detector 1
+Training balanced accuracy; true positives and negatives: 71.17% 42.38% 99.95%
+Validation balanced accuracy; true positives and negatives: 58.42% 16.85% 100.0%
+i_detector 2
+Training balanced accuracy; true positives and negatives: 66.63% 49.58% 83.67%
+Validation balanced accuracy; true positives and negatives: 64.5% 44.05% 84.95%
+i_detector 3
+Training balanced accuracy; true positives and negatives: 64.74% 49.77% 79.71%
+Validation balanced accuracy; true positives and negatives: 63.8% 47.15% 80.45%
+i_detector 4
+Training balanced accuracy; true positives and negatives: 67.72% 50.1% 85.32%
+Validation balanced accuracy; true positives and negatives: 67.58% 47.35% 87.8%
+i_detector 5
+Training balanced accuracy; true positives and negatives: 50.5% 1.0% 100.0%
+Validation balanced accuracy; true positives and negatives: 50.0% 0% 100.0%
+i_detector 6
+Training balanced accuracy; true positives and negatives: 50.49% 0.99% 99.99%
+Validation balanced accuracy; true positives and negatives: 50.0% 0% 100.0%
+i_detector 7
+Training balanced accuracy; true positives and negatives: 50.0% 100.0% 0%
+Validation balanced accuracy; true positives and negatives: 50.0% 100.0% 0%
+i_detector 8
+Training balanced accuracy; true positives and negatives: 33.87% 67.73% 0.01%
+Validation balanced accuracy; true positives and negatives: 43.48% 86.95% 0%
+"""
+
+"""
+"""
+

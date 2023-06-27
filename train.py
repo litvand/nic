@@ -1,3 +1,4 @@
+import gc
 import math
 from copy import deepcopy
 
@@ -44,6 +45,9 @@ def activations_at(sequential, X, module_indices):
     sequential = list(sequential.children())
     activations = []
     for i_module, module in enumerate(sequential):
+        gc.collect()
+        torch.cuda.empty_cache()
+
         X = module(X)
         # Support negative indices
         if i_module in module_indices or i_module - len(sequential) in module_indices:
@@ -212,6 +216,7 @@ def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_
     )
     min_loss = float("inf")
     min_state = net.state_dict()  # Not worth deepcopying
+    # TODO: Does resetting the optimizer's state improve accuracy?
     # min_optim_state = optimizer.state_dict() if restarts else None
 
     for epoch in range(n_epochs):
@@ -256,8 +261,8 @@ def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_
             scheduler.step(loss)
             was_plateau = optimizer.param_groups[0]["lr"] < prev_lr
             
-            if verbose or was_plateau:
-                print(f"Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
+            if verbose or was_plateau or epoch == n_epochs - 1:
+                print(f"--- Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
                 print(f"Training loss running average {loss_avg}")
                 print_acc(batch_outputs, batch_y, "Last batch")
                 if val_X is not None:

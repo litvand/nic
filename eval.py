@@ -43,6 +43,7 @@ def print_balanced_acc(outputs_on_pos, outputs_on_neg, name):
     print(
         f"{name} balanced accuracy; true positives and negatives:",
         percent(0.5 * (acc_on_pos + acc_on_neg)),
+        "     ",
         percent(acc_on_pos),
         percent(acc_on_neg)
     )
