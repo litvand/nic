@@ -7,7 +7,7 @@ import torch
 def LSUV_(
     model,
     data,
-    apply_only_to=["Conv", "Linear", "Bilinear"],
+    apply_only_to=("Conv", "Linear", "Bilinear"),
     std_tol=0.1,
     max_iters=10,
     do_ortho_init=True,
@@ -39,9 +39,7 @@ def LSUV_(
     """
 
     matched_modules = [
-        m
-        for m in model.modules()
-        if any(substr in str(type(m)) for substr in apply_only_to)
+        m for m in model.modules() if any(substr in str(type(m)) for substr in apply_only_to)
     ]
 
     if do_ortho_init:
@@ -51,11 +49,7 @@ def LSUV_(
         )
         for m in matched_modules:
             for p in m.parameters():
-                (
-                    torch.nn.init.orthogonal_(p)
-                    if (p.dim() >= 2)
-                    else torch.nn.init.zeros_(p)
-                )
+                (torch.nn.init.orthogonal_(p) if (p.dim() >= 2) else torch.nn.init.zeros_(p))
 
     logging_FN(
         f"Applying LSUV to {len(matched_modules)} module(s) (up to {max_iters} iters"
