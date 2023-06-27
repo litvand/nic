@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 import torch
 from torch import nn
 from sklearn.kernel_approximation import Nystroem
@@ -8,9 +7,8 @@ import adversary
 import classifier
 import mnist
 import train
-from eval import acc, percent, print_balanced_acc, round_tensor
+from eval import acc, percent, print_balanced_acc
 from mixture import DetectorKmeans
-from svm import SVM
 from train import logistic_regression, Normalize, Whiten
 
 
@@ -110,7 +108,7 @@ class NIC(nn.Module):
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
 
             k = detector_type == "kmeans"
-            self.value_detectors = [] #nn.ModuleList()
+            self.value_detectors = [] if detector_type == "svm" else nn.ModuleList()
             for l in layers:
                 self.value_detectors.append(
                     DetectorKmeans(l[0], n_centers) if k else SkSVM(n_centers)
@@ -126,10 +124,10 @@ class NIC(nn.Module):
             )
 
             pair = torch.cat((logits, logits))
-            self.prov_detectors = [] #nn.ModuleList()
+            self.prov_detectors = [] if detector_type == "svm" else nn.ModuleList()
             for _ in self.classifiers:
                 self.prov_detectors.append(
-                    DetectorKmeans(l[0], n_centers) if k else SkSVM(n_centers)
+                    DetectorKmeans(pair, n_centers) if k else SkSVM(n_centers)
                 )
 
             densities = torch.zeros(1, dtype=X.dtype, device=X.device).expand(
@@ -266,10 +264,10 @@ if __name__ == "__main__":
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
     n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(
-        train_X_pos[0], trained_model, n_centers, detector_type="svm", final_type="svm"
+        train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="vote"
     )
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
-    train.save(detector, f"nic{n_centers}-svm-onnorestart20k")
+    train.save(detector, f"nic{n_centers}-onnorestart20k")
     # train.load(detector, "nic201-onpool20k-ce97eb7455a89a045849b0ccd55c3e6a3bc62763")
 
     print("--- Validation ---")
@@ -318,8 +316,35 @@ Validation balanced accuracy; true positives and negatives: 50.0% 100.0% 0%
 i_detector 8
 Training balanced accuracy; true positives and negatives: 33.87% 67.73% 0.01%
 Validation balanced accuracy; true positives and negatives: 43.48% 86.95% 0%
-"""
 
+Kmeans detector on same net & data:
+--- Validation ---
+Index of first provenance detector: 5
+i_detector 0
+Training balanced accuracy; true positives and negatives: 99.9%       100.0% 99.79%
+Validation balanced accuracy; true positives and negatives: 99.8%       99.9% 99.7%
+i_detector 1
+Training balanced accuracy; true positives and negatives: 99.9%       100.0% 99.79%
+Validation balanced accuracy; true positives and negatives: 95.65%       91.6% 99.7%
+i_detector 2
+Training balanced accuracy; true positives and negatives: 50.05%       100.0% 0.09%
+Validation balanced accuracy; true positives and negatives: 50.05%       100.0% 0.1%
+i_detector 3
+Training balanced accuracy; true positives and negatives: 50.08%       100.0% 0.15%
+Validation balanced accuracy; true positives and negatives: 50.08%       100.0% 0.15%
+i_detector 4
+Training balanced accuracy; true positives and negatives: 50.59%       100.0% 1.17%
+Validation balanced accuracy; true positives and negatives: 50.75%       100.0% 1.5%
+i_detector 5
+Training balanced accuracy; true positives and negatives: 99.9%       100.0% 99.79%
+Validation balanced accuracy; true positives and negatives: 98.33%       96.95% 99.7%
+i_detector 6
+Training balanced accuracy; true positives and negatives: 99.9%       100.0% 99.79%
+Validation balanced accuracy; true positives and negatives: 97.28%       94.85% 99.7%
+i_detector 7
+Training balanced accuracy; true positives and negatives: 50.01%       100.0% 0.02%
+Validation balanced accuracy; true positives and negatives: 50.0%       100.0% 0%
+i_detector 8
+Training balanced accuracy; true positives and negatives: 99.9%       100.0% 99.79%
+Validation balanced accuracy; true positives and negatives: 99.05%       98.4% 99.7%
 """
-"""
-
