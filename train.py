@@ -240,7 +240,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             loss = loss_fn(batch_outputs, batch_y)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            gradient_noise(net, i_x)
+            gradient_noise(net, epoch * len(train_X) + i_x)
             optimizer.step()
 
             loss_avg = loss_avg * (1. - coef_avg) + loss.item() * coef_avg
