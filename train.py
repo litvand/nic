@@ -102,7 +102,7 @@ class Whiten(nn.Module):
         n_features = example_x.numel()
         d = example_x.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
-        self.w = nn.Parameter(torch.zeros(n_features, n_features, device=d), requires_grad=False)
+        self.w = nn.Parameter(torch.eye(n_features, device=d), requires_grad=False)
 
     def fit(self, train_X, zca=True):
         """
@@ -178,7 +178,7 @@ def get_optimizer(Optimizer, model, decay=[], no_decay=[], weight_decay=0.0, **k
 
 def gradient_noise(model, i_x, initial_variance=0.01):
     with torch.no_grad():
-        std = math.sqrt(initial_variance / (1 + i_x / 100) ** 0.55)
+        std = math.sqrt(initial_variance / (1. + i_x / 100.) ** 0.55)
         for param in model.parameters():
             param.grad.add_(torch.randn_like(param.grad), alpha=std)
 
@@ -201,7 +201,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             net_fn = lambda X: net(X).view(-1)
             loss_fn = F.binary_cross_entropy_with_logits
             print_acc = lambda o, y, name: print(
-                f"{name} accuracy:", percent(acc((o >= 0.0) == (y >= 0.0)))
+                f"{name} accuracy:", percent(acc((o >= 0.) == (y >= 0.)))
             )
         else:
             net_fn = net
@@ -214,11 +214,11 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
     min_lr = 5e-6  # Early stop if LR becomes too low
     optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, eps=0, min_lr=min_lr / 2, verbose=True
+        optimizer, eps=0., min_lr=0.5 * min_lr, verbose=True
     )
     min_loss = float("inf")
     min_state = net.state_dict()  # Not worth deepcopying
-    min_optim_state = optimizer.state_dict() if restarts else None
+    # min_optim_state = optimizer.state_dict() if restarts else None
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_X))
@@ -230,7 +230,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             n = len(val_X) if val_X is not None else batch_size
             LSUV_(net, train_X[:n])
 
-        loss_avg, coef_avg = 0.0, batch_size / len(train_X)
+        loss_avg, coef_avg = 0., batch_size / len(train_X)
         loss = None
         for i_x in range(0, len(train_X), batch_size):
             batch_X = train_X[i_x : i_x + batch_size]
@@ -243,7 +243,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             gradient_noise(net, i_x)
             optimizer.step()
 
-            loss_avg = loss_avg * (1.0 - coef_avg) + loss.item() * coef_avg
+            loss_avg = loss_avg * (1. - coef_avg) + loss.item() * coef_avg
 
         with torch.no_grad():
             net.eval()
@@ -262,7 +262,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             if loss <= min_loss:
                 min_loss = loss
                 min_state = deepcopy(net.state_dict())
-                min_optim_state = deepcopy(optimizer.state_dict()) if restarts else None
+                # min_optim_state = deepcopy(optimizer.state_dict()) if restarts else None
 
             prev_lr = optimizer.param_groups[0]["lr"]
             scheduler.step(loss)
@@ -271,8 +271,8 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             elif restarts and optimizer.param_groups[0]["lr"] < prev_lr:
                 net.load_state_dict(min_state)
                 # Reset optimizer state, but not learning rate
-                min_optim_state["param_groups"] = optimizer.param_groups
-                optimizer.load_state_dict(min_optim_state)
+                # min_optim_state["param_groups"] = optimizer.param_groups
+                # optimizer.load_state_dict(min_optim_state)
 
             net.train()
     net.load_state_dict(min_state)

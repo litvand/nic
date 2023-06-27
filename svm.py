@@ -18,18 +18,18 @@ def hinge_loss(outputs, margin):
 
 
 class SVM(nn.Module):
-    def __init__(self, example_x):
+    def __init__(self, example_x):  # TODO: RBF n_centers=None
         super().__init__()
         self.linear = nn.Linear(len(example_x), 1).to(example_x.device)
         with torch.no_grad():
-            self.linear.weight.fill_(1.0 / len(example_x))
-            self.linear.bias.fill_(0.0)
+            self.linear.weight.fill_(1. / len(example_x))
+            self.linear.bias.fill_(0.)
 
     def forward(self, X):
         return self.linear(X).view(-1)
 
     def fit(self, train_X_pos, train_X_neg, verbose=False, n_epochs=1000, margin=0.5, lr=0.1):
-        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0.0, lr=lr)
+        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=lr)
         min_loss = torch.inf
         min_state = None
 
@@ -53,7 +53,7 @@ class SVM(nn.Module):
         return self
 
     def fit_one_class(
-        self, train_X_pos, verbose=False, perfect_train=True, n_epochs=1000, margin=1.0
+        self, train_X_pos, verbose=False, perfect_train=False, n_epochs=1000, margin=1.
     ):
         """
         Trains SVM to give a positive output for all training inputs, while minimizing the total set
@@ -99,7 +99,7 @@ class SVM(nn.Module):
 
             if perfect_train:
                 # Adjust bias by choosing minimum output that avoids false negatives.
-                min_output_should_be = 0.01
+                min_output_should_be = 1e-8
                 self.linear.bias += min_output_should_be - self.linear(train_X_pos).min()
             else:
                 self.linear.bias -= margin  # Replicates sklearn OneClassSVM
