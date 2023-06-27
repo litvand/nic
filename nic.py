@@ -12,7 +12,6 @@ from svm import SVM
 from train import logistic_regression, Normalize, Whiten
 
 
-
 def cat_layer_pairs(layers):
     """
     Concatenate features of each consecutive pair of layers.
@@ -163,7 +162,7 @@ class NIC(nn.Module):
         logits, logits_neg = [], []
         for classifier, layer, layer_neg in zip(self.classifiers, train_layers, layers_neg):
             data = ((layer, train_y), (None, None))
-            logistic_regression(classifier, data, init=True, n_epochs=10)
+            logistic_regression(classifier, data, init=True)
             logits.append(classifier(layer))
             logits_neg.append(classifier(layer_neg))
         
@@ -220,7 +219,7 @@ class NIC(nn.Module):
                 self.final_detector.weight.fill_(1. / densities.size(1))
                 self.final_detector.bias.copy_(0.5 * densities.size(1))
 
-            logistic_regression(self.final_detector, regression_data, n_epochs=100)
+            logistic_regression(self.final_detector, regression_data)
             return self
 
         self.final_detector.fit_one_class(densities)
@@ -246,9 +245,9 @@ if __name__ == "__main__":
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
     n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(train_X_pos[0], trained_model, n_centers)
-    # detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
-    # train.save(detector, f"nic{n_centers}-onpool20k")
-    train.load(detector, "nic201-onpool20k-ce97eb7455a89a045849b0ccd55c3e6a3bc62763")
+    detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
+    train.save(detector, f"nic{n_centers}-onpool20k")
+    # train.load(detector, "nic201-onpool20k-ce97eb7455a89a045849b0ccd55c3e6a3bc62763")
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
