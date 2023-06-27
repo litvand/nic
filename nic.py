@@ -6,7 +6,7 @@ import adversary
 import classifier
 import mnist
 import train
-from eval import acc, percent, round_tensor
+from eval import acc, percent, print_balanced_acc, round_tensor
 from mixture import DetectorKmeans
 from svm import SVM
 from train import logistic_regression, Normalize, Whiten
@@ -93,9 +93,10 @@ class NIC(nn.Module):
                 [nn.Linear(l.size(1), n_classes).to(X.device) for l in layers[:-2]]
             )
 
+            pair = torch.cat((logits, logits))
             self.prov_detectors = nn.ModuleList()
             for _ in self.classifiers:
-                self.prov_detectors.append(DetectorKmeans(logits, n_centers) if k else SVM(logits))
+                self.prov_detectors.append(DetectorKmeans(pair, n_centers) if k else SVM(pair))
 
             densities = torch.zeros(1, dtype=X.dtype, device=X.device).expand(
                 len(self.value_detectors) + len(self.prov_detectors)
@@ -195,7 +196,6 @@ class NIC(nn.Module):
                     [acc(d_neg < 0.) for d_neg in densities_neg]
                 )
                 self.final_detector.bias.copy_(0.)
-                print("vote weights", self.final_detector.weight)
 
             # Default `self.final_normalize` leaves inputs unchanged.
             return self
@@ -246,9 +246,9 @@ if __name__ == "__main__":
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
     n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(train_X_pos[0], trained_model, n_centers)
-    detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
-    train.save(detector, f"nic{n_centers}-onpool20k")
-    # train.load(detector, "nic201-onpool20k-9b780bcba9d76f8ffb7191214e84378bcbf6ece7")
+    # detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
+    # train.save(detector, f"nic{n_centers}-onpool20k")
+    train.load(detector, "nic201-onpool20k-ce97eb7455a89a045849b0ccd55c3e6a3bc62763")
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
@@ -260,15 +260,7 @@ if __name__ == "__main__":
         val_a_pos = detector.activations(val_X_pos, trained_model)
         val_a_neg = detector.activations(val_X_neg, trained_model)
         print("Index of first provenance detector:", len(detector.value_detectors))
-        for i_detector in len(train_a_pos):
+        for i_detector in range(len(train_a_pos)):
             print("i_detector", i_detector)
-            print(
-                "train acc",
-                percent(acc(train_a_pos[i_detector] >= 0.)),
-                percent(acc(train_a_neg[i_detector] < 0.)),
-            )
-            print(
-                "val acc",
-                percent(acc(val_a_pos[i_detector] >= 0.)),
-                percent(acc(val_a_neg[i_detector] < 0.))
-            )
+            print_balanced_acc(train_a_pos[i_detector], train_a_neg[i_detector], "Training")
+            print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")

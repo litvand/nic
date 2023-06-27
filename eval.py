@@ -38,6 +38,16 @@ def acc(is_correct):
     return div_zero(is_correct.count_nonzero(), len(is_correct))
 
 
+def print_balanced_acc(outputs_on_pos, outputs_on_neg, name):
+    acc_on_pos, acc_on_neg = acc(outputs_on_pos >= 0.), acc(outputs_on_neg < 0.)
+    print(
+        f"{name} balanced accuracy; true positives and negatives:",
+        percent(0.5 * (acc_on_pos + acc_on_neg)),
+        percent(acc_on_pos),
+        percent(acc_on_neg)
+    )
+
+
 def bin_acc(outputs, targets):
     """
     Get binary classification accuracy, balanced accuracy, true positive and true negative rate
