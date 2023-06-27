@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from sklearn.svm import SVC
+
 # from sklearn.linear_model import SGDOneClassSVM
 from torch import nn
 
@@ -21,14 +22,14 @@ class SVM(nn.Module):
         super().__init__()
         self.linear = nn.Linear(len(example_x), 1).to(example_x.device)
         with torch.no_grad():
-            self.linear.weight.fill_(1. / len(example_x))
-            self.linear.bias.fill_(0.)
+            self.linear.weight.fill_(1.0 / len(example_x))
+            self.linear.bias.fill_(0.0)
 
     def forward(self, X):
         return self.linear(X).view(-1)
-    
+
     def fit(self, train_X_pos, train_X_neg, verbose=False, n_epochs=1000, margin=0.5, lr=0.1):
-        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=lr)
+        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0.0, lr=lr)
         min_loss = torch.inf
         min_state = None
 
@@ -42,22 +43,17 @@ class SVM(nn.Module):
             with torch.no_grad():
                 if verbose or epoch == n_epochs - 1:
                     print(f"Epoch {epoch}/{n_epochs}; loss {loss.item()}")
-                
+
                 if loss <= min_loss:
                     min_loss = loss
                     min_state = deepcopy(self.linear.state_dict())
-        
+
         if min_state is not None:
-            self.linear.load_state_dict(min_state)        
+            self.linear.load_state_dict(min_state)
         return self
 
     def fit_one_class(
-        self,
-        train_X_pos,
-        verbose=False,
-        perfect_train=True,
-        n_epochs=1000,
-        margin=1.
+        self, train_X_pos, verbose=False, perfect_train=True, n_epochs=1000, margin=1.0
     ):
         """
         Trains SVM to give a positive output for all training inputs, while minimizing the total set
@@ -92,7 +88,7 @@ class SVM(nn.Module):
             with torch.no_grad():
                 if verbose or epoch == n_epochs - 1:
                     print(f"Epoch {epoch}/{n_epochs}; loss {loss.item()}")
-                
+
                 if loss <= min_loss:
                     min_loss = loss
                     min_state = deepcopy(self.linear.state_dict())
@@ -136,7 +132,7 @@ if __name__ == "__main__":
         if sk_svm is not None:
             train_X = torch.cat((train_X_pos, train_X_neg), dim=0)
             train_y = torch.zeros(len(train_X), dtype=torch.int32)
-            train_y[:len(train_X_pos)].fill_(1)
+            train_y[: len(train_X_pos)].fill_(1)
             sk_svm.fit(train_X.cpu().numpy(), train_y.numpy())
             # print("sk weights", sk_svm.coef_)
             # print("sk bias (== -offset)", -sk_svm.offset_)

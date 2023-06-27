@@ -37,7 +37,9 @@ def load(model, filename):
     state_dict = torch.load(f"models/{filename}.pt")
     model.load_state_dict(state_dict)
 
+
 import gc
+
 
 def activations_at(sequential, X, module_indices):
     """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
@@ -80,11 +82,11 @@ class Normalize(nn.Module):
         if unit_range:
             # Each channel in the range [0, 1] (in training data)
             self.shift.copy_(train_X.min(1)[0])  # Min of each channel (in training data)
-            self.inv_scale.copy_(1. / (train_X.max(1)[0] - self.shift))
+            self.inv_scale.copy_(1.0 / (train_X.max(1)[0] - self.shift))
         else:
             # Each channel normally distributed
             self.shift.copy_(train_X.mean(1))  # Mean of each channel
-            self.inv_scale.copy_(1. / train_X.std(1))
+            self.inv_scale.copy_(1.0 / train_X.std(1))
 
         return self
 
@@ -128,7 +130,7 @@ class Whiten(nn.Module):
 _get_optimizer_warned = set()
 
 
-def get_optimizer(Optimizer, model, decay=[], no_decay=[], weight_decay=0., **kwargs):
+def get_optimizer(Optimizer, model, decay=[], no_decay=[], weight_decay=0.0, **kwargs):
     """
     Split parameters of `model` into those that will experience weight decay (weights) and those
     that won't (biases, normalization, embedding) and those that won't be updated at all. Inspired
@@ -199,7 +201,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             net_fn = lambda X: net(X).view(-1)
             loss_fn = F.binary_cross_entropy_with_logits
             print_acc = lambda o, y, name: print(
-                f"{name} accuracy:", percent(acc((o >= 0.) == (y >= 0.)))
+                f"{name} accuracy:", percent(acc((o >= 0.0) == (y >= 0.0)))
             )
         else:
             net_fn = net
@@ -228,7 +230,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             n = len(val_X) if val_X is not None else batch_size
             LSUV_(net, train_X[:n])
 
-        loss_avg, coef_avg = 0., batch_size / len(train_X)
+        loss_avg, coef_avg = 0.0, batch_size / len(train_X)
         loss = None
         for i_x in range(0, len(train_X), batch_size):
             batch_X = train_X[i_x : i_x + batch_size]
@@ -241,7 +243,7 @@ def logistic_regression(net, data, init=False, batch_size=150, n_epochs=1000):
             gradient_noise(net, i_x)
             optimizer.step()
 
-            loss_avg = loss_avg * (1. - coef_avg) + loss.item() * coef_avg
+            loss_avg = loss_avg * (1.0 - coef_avg) + loss.item() * coef_avg
 
         with torch.no_grad():
             net.eval()

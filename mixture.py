@@ -409,7 +409,7 @@ def geometric_threshold(densities_pos, densities_neg):
 
 
 def reciprocal_threshold(densities_pos, densities_neg):
-    return 2. / (1. / densities_pos.min() + 1. / densities_neg.max())
+    return 2.0 / (1.0 / densities_pos.min() + 1.0 / densities_neg.max())
 
 
 def true_negatives_threshold(densities_pos, densities_neg, min_acc_on_neg):
@@ -443,7 +443,7 @@ class DetectorKmeans(nn.Module):
         # return (1. / (ke.Vj(self.vars[:, None]) + d_ij))).matvec(self.vars**2 * self.prs).view(-1)
 
         # Gaussian:
-        d_ij = ke.Vi(X).weightedsqdist(ke.Vj(self.centers.data), 1. / ke.Vj(self.vars[:, None]))
+        d_ij = ke.Vi(X).weightedsqdist(ke.Vj(self.centers.data), 1.0 / ke.Vj(self.vars[:, None]))
         return (-0.5 * d_ij).logsumexp(dim=1, weight=ke.Vj(self.prs[:, None])).view(-1)
 
     def forward(self, X):
@@ -460,7 +460,7 @@ class DetectorKmeans(nn.Module):
         val_X_pos=None,
         val_X_neg=None,
         n_retries=4,
-        expected_acc=0.6
+        expected_acc=0.6,
     ):
         """
         It can be better to leave train_X_neg=None. train_X_neg is only used to choose the
@@ -494,9 +494,9 @@ class DetectorKmeans(nn.Module):
                     # maybe when it's the geometric mean of densities or the reciprocal mean of
                     # reciprocal distances.
                     train_densities_neg = self.density(train_X_neg)
-                    self.threshold.copy_(true_negatives_threshold(
-                        train_densities, train_densities_neg, expected_acc
-                    ))
+                    self.threshold.copy_(
+                        true_negatives_threshold(train_densities, train_densities_neg, expected_acc)
+                    )
                     train_densities = (train_densities, train_densities_neg)
                 else:
                     self.threshold.copy_(train_densities.min())
@@ -569,7 +569,8 @@ if __name__ == "__main__":
     print("Expecting equal clusters:", getattr(detector, "equal_clusters", None))
     balanced_accs = 0.5 * (accs_on_pos + accs_on_neg)
     print(
-        "Balanced validation accuracy [min-max]:", percent(balanced_accs.mean()),
+        "Balanced validation accuracy [min-max]:",
+        percent(balanced_accs.mean()),
         f"[{percent(balanced_accs.min())}-{percent(balanced_accs.max())}]",
     )
     print(

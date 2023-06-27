@@ -9,8 +9,10 @@ import train
 from eval import acc, percent, round_tensor
 from mixture import DetectorKmeans
 from svm import SVM
+
 print("1")
 from train import logistic_regression, Normalize, Whiten
+
 print("2")
 
 
@@ -135,6 +137,7 @@ class NIC(nn.Module):
                     `trained_model`. Must have `activations` method that returns activations of
                     last layer and optionally activations of some earlier layers.
     """
+
     detector_types = ["kmeans", "svm"]
     final_types = ["vote", "logistic", "svm"]
 
@@ -153,12 +156,12 @@ class NIC(nn.Module):
             layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
-            
+
             k = detector_type == "kmeans"
-            self.value_detectors = nn.ModuleList([
-                DetectorKmeans(l[0], n_centers) if k else SVM(l[0]) for l in layers
-            ])
-            
+            self.value_detectors = nn.ModuleList(
+                [DetectorKmeans(l[0], n_centers) if k else SVM(l[0]) for l in layers]
+            )
+
             densities = torch.zeros(len(self.value_detectors), dtype=X.dtype, device=X.device)
             self.final_normalize = Normalize(densities)
 
@@ -178,7 +181,7 @@ class NIC(nn.Module):
         densities = []
         for value_detector, layer in zip(self.value_detectors, layers):
             densities.append(value_detector(layer))
-        
+
         if i_layer is not None:
             # Detect based on a single layer
             return densities[i_layer]
@@ -195,28 +198,33 @@ class NIC(nn.Module):
                 whiten.fit(layer)
             train_layers = [whiten(layer) for whiten, layer in zip(self.whiten, train_layers)]
 
-            layers_neg = [w(l.flatten(1)) for w, l in zip(
-                self.whiten, [train_X_neg] + trained_model.activations(train_X_neg)
-            )]
+            layers_neg = [
+                w(l.flatten(1))
+                for w, l in zip(self.whiten, [train_X_neg] + trained_model.activations(train_X_neg))
+            ]
 
         densities, densities_neg = [], []
         for value_detector, layer, layer_neg in zip(self.value_detectors, train_layers, layers_neg):
-            # d, d_neg = value_detector.fit_predict(layer, layer_neg)
-            # densities.append(d)
-            # densities_neg.append(d_neg)
             if self.detector_type == "kmeans":
                 d = value_detector.fit_predict(layer)
+                # d, d_neg = value_detector.fit_predict(layer, layer_neg)
+                # densities_neg.append(d_neg)
             else:
                 value_detector.fit_one_class(layer)
                 d = value_detector(layer)
             densities.append(d)
             densities_neg.append(value_detector(layer_neg))
-        
+
         if self.final_type == "vote":
             with torch.no_grad():
-                for d_neg in densities_neg:
-                    self.final_detector.weight.copy_((acc(d_neg < 0.) - 0.5).clamp(min=0.))
-                self.final_detector.bias.copy_(0.)
+                # Accuracy on positive training examples is always 100%, so only calculate accuracy
+                # on negative examples.
+                self.final_detector.weight[0, :] = torch.tensor(
+                    [acc(d_neg < 0.0) for d_neg in densities_neg]
+                )
+                self.final_detector.bias.copy_(0.0)
+                print("vote weights", self.final_detector.weight)
+
             return self
 
         with torch.no_grad():
@@ -230,17 +238,21 @@ class NIC(nn.Module):
             is_adversarial = torch.zeros(
                 len(densities) + len(densities_neg), dtype=densities.dtype, device=densities.device
             )
-            is_adversarial[:len(densities)].fill_(1.)
+            is_adversarial[: len(densities)].fill_(1.0)
+
             densities = torch.cat((densities, densities_neg))
             regression_data = ((densities, is_adversarial), (None, None))
+
             with torch.no_grad():
-                self.final_detector.weight.fill_(1. / densities.size(1))
+                self.final_detector.weight.fill_(1.0 / densities.size(1))
                 self.final_detector.bias.copy_(0.5 * densities.size(1))
+
             logistic_regression(self.final_detector, regression_data, n_epochs=100)
             return self
-        
+
         self.final_detector.fit(densities, densities_neg)
         return self
+
 
 if __name__ == "__main__":
     torch.manual_seed(98765)
@@ -248,7 +260,7 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=2000, n_val=2000, device=device
+        n_train=20000, n_val=2000, device=device
     )
 
     print("--- Model ---")
@@ -259,12 +271,11 @@ if __name__ == "__main__":
     print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
-    n_centers = 201 #1 + len(train_X_pos)//100
+    n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(train_X_pos[0], trained_model, n_centers)
-    # detector.fit(train_X_pos, train_X_neg, trained_model)
-    # train.save(detector, f"nic{n_centers}-onpool20k")
-    train.load(detector, "nic201-onpool20k-9b780bcba9d76f8ffb7191214e84378bcbf6ece7")
-    print("final_detector weight", detector.final_detector.weight)
+    detector.fit(train_X_pos, train_X_neg, trained_model)
+    train.save(detector, f"nic{n_centers}-onpool20k")
+    # train.load(detector, "nic201-onpool20k-9b780bcba9d76f8ffb7191214e84378bcbf6ece7")
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
@@ -275,7 +286,7 @@ if __name__ == "__main__":
             print(
                 "train acc",
                 percent(acc(detector(train_X_pos, trained_model, i_layer) >= 0)),
-                percent(acc(detector(train_X_neg, trained_model, i_layer) < 0))
+                percent(acc(detector(train_X_neg, trained_model, i_layer) < 0)),
             )
             val_outputs_pos = detector(val_X_pos, trained_model, i_layer)
             val_outputs_neg = detector(val_X_neg, trained_model, i_layer)
