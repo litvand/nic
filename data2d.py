@@ -137,7 +137,7 @@ def scatter_outputs_y(X_pos, outputs_pos, X_neg, outputs_neg, model_name, center
     # neg_neg_colors = _get_colors(neg_neg_outputs, min_neg_output, max_neg_output, red)
 
     _, ax = plt.subplots()
-    ax.set_title(model_name + " (marker=target, color=output)")
+    ax.set_title(model_name + " (marker=label, color=output)")
     ax.set_aspect("equal", adjustable="box")
 
     plt.scatter(X_pos[:, 0], X_pos[:, 1], marker=",", c="0.8")

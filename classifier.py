@@ -22,9 +22,7 @@ class CleverHans1(nn.Module):
         self.conv3 = nn.Conv2d(
             128, 128, 5, 1
         )  # (batch_size, 128, 8, 8) --> (batch_size, 128, 4, 4)
-        self.fc1 = nn.Linear(
-            128 * 4 * 4, 128
-        )  # (batch_size, 128, 4, 4) --> (batch_size, 2048)
+        self.fc1 = nn.Linear(128 * 4 * 4, 128)  # (batch_size, 128, 4, 4) --> (batch_size, 2048)
         self.fc2 = nn.Linear(128, 10)  # (batch_size, 128) --> (batch_size, 10)
 
     def forward(self, x):
@@ -107,6 +105,7 @@ if __name__ == "__main__":
     train.save(net, "ch20k")
 
     import eval
+
     with torch.no_grad():
         eval.print_multi_acc(net(data[1][0]), data[1][1], "val")
 

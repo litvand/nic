@@ -12,11 +12,11 @@ from mixture import DetectorKmeans
 from train import logistic_regression, Normalize, Whiten
 
 
-class SkSVM():
+class SkSVM:
     def __init__(self, n_centers=None):
         self.nystroem = None if n_centers is None else Nystroem(n_components=n_centers)
         self.svm = SGDOneClassSVM()
-    
+
     def fit_predict(self, X):
         dtype, device = X.dtype, X.device
         X = X.detach().cpu().numpy()
@@ -46,12 +46,12 @@ def cat_layer_pairs(layers):
     with torch.no_grad():
         n_features = torch.tensor([layer.size(1) for layer in layers], dtype=torch.int32)
         i_next_features = n_features.cumsum(dim=0, dtype=torch.int32)
-    
+
     pairs = []
     for i_layer in range(len(layers) - 1):
         i_cur = i_next_features[i_layer] - n_features[i_layer]
         i_next_next = i_next_features[i_layer + 1]
-        pairs.append(cat_all[:, i_cur : i_next_next].contiguous())
+        pairs.append(cat_all[:, i_cur:i_next_next].contiguous())
 
     return pairs
 
@@ -73,7 +73,7 @@ def fit_detectors(detectors, layers, layers_neg, _detector_type):
     for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
         densities.append(detector.fit_predict(layer))
         densities_neg.append(detector(layer_neg))
-        
+
     return densities, densities_neg
 
 
@@ -113,7 +113,7 @@ class NIC(nn.Module):
                 self.value_detectors.append(
                     DetectorKmeans(l[0], n_centers) if k else SkSVM(n_centers)
                 )
-            
+
             # Last layer already contains logits from trained model, so there's no need to use a
             # classifier. Last layer is also a transformation of the second-to-last layer, so it
             # isn't useful to train a classifier based on the second-to-last layer.
@@ -147,16 +147,14 @@ class NIC(nn.Module):
         layers = whitened_layers(self.whiten, X, trained_model)
         value_densities = [v(l) for v, l in zip(self.value_detectors, layers)]
         logits = [c(l) for c, l in zip(self.classifiers, layers[:-2])] + [layers[-1]]
-        prov_densities = [
-            p(l) for p, l in zip(self.prov_detectors, cat_layer_pairs(logits))
-        ]
+        prov_densities = [p(l) for p, l in zip(self.prov_detectors, cat_layer_pairs(logits))]
 
         densities = value_densities + prov_densities
         densities.append(
             self.final_detector(self.final_normalize(cat_features(densities))).view(-1)
         )
         return densities
-    
+
     def forward(self, X, trained_model):
         return self.activations(X, trained_model)[-1]
 
@@ -184,7 +182,7 @@ class NIC(nn.Module):
         value_densities, value_densities_neg = fit_detectors(
             self.value_detectors, layers, layers_neg, self.detector_type
         )
-        
+
         print("--- NIC classifiers ---")
         logits, logits_neg = [], []
         for classifier, layer, layer_neg in zip(self.classifiers, layers, layers_neg):
@@ -192,16 +190,16 @@ class NIC(nn.Module):
             logistic_regression(classifier, data, init=True, n_epochs=100)
             logits.append(classifier(layer))
             logits_neg.append(classifier(layer_neg))
-        
+
         logits.append(layers[-1])
         logits_neg.append(layers_neg[-1])
         pairs, pairs_neg = cat_layer_pairs(logits), cat_layer_pairs(logits_neg)
-        
+
         print("--- Provenance detectors ---")
         prov_densities, prov_densities_neg = fit_detectors(
             self.prov_detectors, pairs, pairs_neg, self.detector_type
         )
-        
+
         print("--- NIC final ---")
         densities = value_densities + prov_densities
         densities_neg = value_densities_neg + prov_densities_neg
@@ -211,9 +209,9 @@ class NIC(nn.Module):
                 # Accuracy on positive training examples is always 100%, so only calculate accuracy
                 # on negative examples.
                 self.final_detector.weight[0, :] = torch.tensor(
-                    [acc(d_neg < 0.) for d_neg in densities_neg]
+                    [acc(d_neg < 0.0) for d_neg in densities_neg]
                 )
-                self.final_detector.bias.copy_(0.)
+                self.final_detector.bias.copy_(0.0)
 
             # Default `self.final_normalize` leaves inputs unchanged.
             return self
@@ -229,13 +227,13 @@ class NIC(nn.Module):
             is_pos = torch.zeros(
                 len(densities) + len(densities_neg), dtype=densities.dtype, device=densities.device
             )
-            is_pos[: len(densities)].fill_(1.)
+            is_pos[: len(densities)].fill_(1.0)
 
             densities = torch.cat((densities, densities_neg))
             regression_data = ((densities, is_pos), (None, None))
 
             with torch.no_grad():
-                self.final_detector.weight.fill_(1. / densities.size(1))
+                self.final_detector.weight.fill_(1.0 / densities.size(1))
                 self.final_detector.bias.copy_(0.5 * densities.size(1))
 
             logistic_regression(self.final_detector, regression_data, n_epochs=100)

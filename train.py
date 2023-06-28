@@ -176,17 +176,17 @@ def get_optimizer(Optimizer, model, decay=[], no_decay=[], weight_decay=0.0, **k
 
 def gradient_noise(model, i_x, initial_variance=0.01):
     with torch.no_grad():
-        std = math.sqrt(initial_variance / (1. + i_x / 100.) ** 0.55)
+        std = math.sqrt(initial_variance / (1.0 + i_x / 100.0) ** 0.55)
         for param in model.parameters():
             param.grad.add_(torch.randn_like(param.grad), alpha=std)
 
 
 def logistic_regression(
-    net, data, init=False, verbose=False, lr=1e-3, batch_size=128, n_epochs=100, grad_var=0.
+    net, data, init=False, verbose=False, lr=1e-3, batch_size=128, n_epochs=100, grad_var=0.0
 ):
     """
     net: Should output logits for each class (can be single logit for binary classification)
-    data: Training and validation inputs and targets, where targets are class indices.
+    data: Training and validation inputs and labels, where labels are class indices.
     init: Whether to initialize the net with random weights
     """
 
@@ -201,7 +201,7 @@ def logistic_regression(
             net_fn = lambda X: net(X).view(-1)
             loss_fn = F.binary_cross_entropy_with_logits
             print_acc = lambda o, y, name: print(
-                f"{name} accuracy:", percent(acc((o >= 0.) == (y >= 0.)))
+                f"{name} accuracy:", percent(acc((o >= 0.0) == (y >= 0.0)))
             )
         else:
             net_fn = net
@@ -214,7 +214,7 @@ def logistic_regression(
     min_lr = lr * 5e-2  # Early stop if LR becomes too low
     optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, eps=0., min_lr=0.5 * min_lr, verbose=True
+        optimizer, eps=0.0, min_lr=0.5 * min_lr, verbose=True
     )
     min_loss = float("inf")
     min_state = net.state_dict()  # Not worth deepcopying
@@ -230,7 +230,7 @@ def logistic_regression(
             n = len(val_X) if val_X is not None else batch_size
             LSUV_(net, train_X[:n])
 
-        loss, epoch_loss = None, 0.
+        loss, epoch_loss = None, 0.0
         for i_x in range(0, len(train_X), batch_size):
             batch_X = train_X[i_x : i_x + batch_size]
             batch_outputs = net_fn(batch_X)
@@ -240,7 +240,7 @@ def logistic_regression(
             epoch_loss += loss.item()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            if grad_var > 0.:
+            if grad_var > 0.0:
                 gradient_noise(net, epoch * len(train_X) + i_x, grad_var)
             optimizer.step()
 
@@ -263,7 +263,7 @@ def logistic_regression(
             prev_lr = optimizer.param_groups[0]["lr"]
             scheduler.step(loss)
             was_plateau = optimizer.param_groups[0]["lr"] < prev_lr
-            
+
             if verbose or was_plateau or epoch == n_epochs - 1:
                 print(f"--- Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
                 print(f"Epoch average training loss: {epoch_loss}")

@@ -30,9 +30,7 @@ class CNN(torch.nn.Module):
         self.conv3 = nn.Conv2d(
             128, 128, 5, 1
         )  # (batch_size, 128, 8, 8) --> (batch_size, 128, 4, 4)
-        self.fc1 = nn.Linear(
-            128 * 4 * 4, 128
-        )  # (batch_size, 128, 4, 4) --> (batch_size, 2048)
+        self.fc1 = nn.Linear(128 * 4 * 4, 128)  # (batch_size, 128, 4, 4) --> (batch_size, 2048)
         self.fc2 = nn.Linear(128, 10)  # (batch_size, 128) --> (batch_size, 10)
 
     def forward(self, x):
@@ -75,18 +73,12 @@ class PyNet(nn.Module):
 
 def ld_mnist():
     """Load training and test data."""
-    train_transforms = torchvision.transforms.Compose(
-        [torchvision.transforms.ToTensor()]
-    )
-    test_transforms = torchvision.transforms.Compose(
-        [torchvision.transforms.ToTensor()]
-    )
+    train_transforms = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
+    test_transforms = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
 
     # Load MNIST dataset
     train_dataset = MNIST(root="/tmp/data", transform=train_transforms, download=True)
-    test_dataset = MNIST(
-        root="/tmp/data", train=False, transform=test_transforms, download=True
-    )
+    test_dataset = MNIST(root="/tmp/data", train=False, transform=test_transforms, download=True)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=128, shuffle=True, num_workers=2
@@ -130,11 +122,7 @@ def main(_):
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
-        print(
-            "epoch: {}/{}, train loss: {:.3f}".format(
-                epoch, FLAGS.nb_epochs, train_loss
-            )
-        )
+        print("epoch: {}/{}, train loss: {:.3f}".format(epoch, FLAGS.nb_epochs, train_loss))
 
     # Evaluate on clean and adversarial data
     net.eval()
@@ -144,21 +132,13 @@ def main(_):
         x_fgm = fast_gradient_method(net, x, FLAGS.eps, np.inf)
         x_pgd = projected_gradient_descent(net, x, FLAGS.eps, 0.01, 40, np.inf)
         _, y_pred = net(x).max(1)  # model prediction on clean examples
-        _, y_pred_fgm = net(x_fgm).max(
-            1
-        )  # model prediction on FGM adversarial examples
-        _, y_pred_pgd = net(x_pgd).max(
-            1
-        )  # model prediction on PGD adversarial examples
+        _, y_pred_fgm = net(x_fgm).max(1)  # model prediction on FGM adversarial examples
+        _, y_pred_pgd = net(x_pgd).max(1)  # model prediction on PGD adversarial examples
         report.nb_test += y.size(0)
         report.correct += y_pred.eq(y).sum().item()
         report.correct_fgm += y_pred_fgm.eq(y).sum().item()
         report.correct_pgd += y_pred_pgd.eq(y).sum().item()
-    print(
-        "test acc on clean examples (%): {:.3f}".format(
-            report.correct / report.nb_test * 100.0
-        )
-    )
+    print("test acc on clean examples (%): {:.3f}".format(report.correct / report.nb_test * 100.0))
     print(
         "test acc on FGM adversarial examples (%): {:.3f}".format(
             report.correct_fgm / report.nb_test * 100.0
@@ -174,9 +154,7 @@ def main(_):
 if __name__ == "__main__":
     flags.DEFINE_integer("nb_epochs", 8, "Number of epochs.")
     flags.DEFINE_float("eps", 0.3, "Total epsilon for FGM and PGD attacks.")
-    flags.DEFINE_bool(
-        "adv_train", False, "Use adversarial training (on PGD adversarial examples)."
-    )
+    flags.DEFINE_bool("adv_train", False, "Use adversarial training (on PGD adversarial examples).")
     flags.DEFINE_enum("model", "cnn", ["cnn", "pynet"], "Choose model type.")
 
     app.run(main)

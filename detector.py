@@ -13,17 +13,17 @@ from mixture import DetectorKmeans
 from nic import DetectorNIC
 
 
-def balanced_acc_threshold(train_outputs, is_positive_target):
+def balanced_acc_threshold(train_outputs, is_positive_label):
     """
     Estimate the threshold that maximizes balanced accuracy
 
-    train_outputs: 1d tensor; larger output --> should be positive target on average
-    is_positive_target: 1d bool tensor
+    train_outputs: 1d tensor; larger output --> should be positive label on average
+    is_positive_label: 1d bool tensor
     """
 
-    pos_target_min = train_outputs[is_positive_target].min()
-    neg_target_max = train_outputs[~is_positive_target].max()
-    return (pos_target_min + neg_target_max) / 2
+    pos_label_min = train_outputs[is_positive_label].min()
+    neg_label_max = train_outputs[~is_positive_label].max()
+    return (pos_label_min + neg_label_max) / 2
 
 
 class DetectorNet(nn.Module):
@@ -50,7 +50,7 @@ class DetectorNet(nn.Module):
 
     def fit(self, data, trained_model, eps):
         """
-        data: Original data ((train_imgs, train_targets), (val_imgs, val_targets))
+        data: Original data ((train_imgs, train_labels), (val_imgs, val_labels))
         trained_model: Model trained to classify the original data
         eps: FGSM epsilon to use when generating new data
         """
@@ -86,8 +86,8 @@ if __name__ == "__main__":
     detector = DetectorNIC(example_img, trained_model, 202).to(device)
     train.load(detector, "nic202-onfc20k-836e70c6cf928b7abc81c32d7856f906f39cccba")
 
-    # detector_val_imgs, detector_val_targets = detector.last_detector_data[1]
-    detector_val_imgs, detector_val_targets = adversary.fgsm_detector_data(
+    # detector_val_imgs, detector_val_labels = detector.last_detector_data[1]
+    detector_val_imgs, detector_val_labels = adversary.fgsm_detector_data(
         data[1][0], data[1][1], trained_model, 0.2
     )
     with torch.no_grad():
@@ -100,13 +100,13 @@ if __name__ == "__main__":
             "thresh",
             detector.final_detector.threshold,
             "neg",
-            val_outputs[detector_val_targets != 1].max(),
-            val_outputs[detector_val_targets != 1].mean(),
+            val_outputs[detector_val_labels != 1].max(),
+            val_outputs[detector_val_labels != 1].mean(),
         )
 
         thresholds = [i / 10 for i in range(-5, 7)]
         for t in thresholds:
-            eval.print_bin_acc(val_outputs + t, detector_val_targets == 1, f"Threshold {t}")
+            eval.print_bin_acc(val_outputs + t, detector_val_labels == 1, f"Threshold {t}")
 
     # eval.plot_distr_overlap(
     #     prs_on_adv,
@@ -125,17 +125,17 @@ if __name__ == "__main__":
 # detector-net-onfc20k-63bc3202b7f53ba1bc0adadfcf906a6f784494a5
 # (All nets trained with restarts.)
 # Threshold 0.4996219873428345 accuracy: 87.35%
-# Threshold 0.4996219873428345 true positives (as fraction of positive targets): 90.6%
-# Threshold 0.4996219873428345 true negatives (as fraction of negative targets): 84.1%
+# Threshold 0.4996219873428345 true positives (as fraction of positive labels): 90.6%
+# Threshold 0.4996219873428345 true negatives (as fraction of negative labels): 84.1%
 # Threshold 0.1 accuracy: 82.6%
-# Threshold 0.1 true positives (as fraction of positive targets): 99.0%
-# Threshold 0.1 true negatives (as fraction of negative targets): 66.2%
+# Threshold 0.1 true positives (as fraction of positive labels): 99.0%
+# Threshold 0.1 true negatives (as fraction of negative labels): 66.2%
 # Threshold 0.2 accuracy: 86.0%
-# Threshold 0.2 true positives (as fraction of positive targets): 97.6%
-# Threshold 0.2 true negatives (as fraction of negative targets): 74.4%
+# Threshold 0.2 true positives (as fraction of positive labels): 97.6%
+# Threshold 0.2 true negatives (as fraction of negative labels): 74.4%
 # Threshold 0.7 accuracy: 86.0%
-# Threshold 0.7 true positives (as fraction of positive targets): 82.5%
-# Threshold 0.7 true negatives (as fraction of negative targets): 89.5%
+# Threshold 0.7 true positives (as fraction of positive labels): 82.5%
+# Threshold 0.7 true negatives (as fraction of negative labels): 89.5%
 # Threshold 0.99 accuracy: 56.3%
-# Threshold 0.99 true positives (as fraction of positive targets): 13.5%
-# Threshold 0.99 true negatives (as fraction of negative targets): 99.1%
+# Threshold 0.99 true positives (as fraction of positive labels): 13.5%
+# Threshold 0.99 true negatives (as fraction of negative labels): 99.1%

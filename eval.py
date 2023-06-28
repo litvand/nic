@@ -39,55 +39,55 @@ def acc(is_correct):
 
 
 def print_balanced_acc(outputs_on_pos, outputs_on_neg, name):
-    acc_on_pos, acc_on_neg = acc(outputs_on_pos >= 0.), acc(outputs_on_neg < 0.)
+    acc_on_pos, acc_on_neg = acc(outputs_on_pos >= 0.0), acc(outputs_on_neg < 0.0)
     print(
         f"{name} balanced accuracy; true positives and negatives:",
         percent(0.5 * (acc_on_pos + acc_on_neg)),
         "     ",
         percent(acc_on_pos),
-        percent(acc_on_neg)
+        percent(acc_on_neg),
     )
 
 
-def bin_acc(outputs, targets):
+def bin_acc(outputs, labels):
     """
     Get binary classification accuracy, balanced accuracy, true positive and true negative rate
 
     outputs: Float tensor (n_outputs); positive output <--> positive class.
-    targets: Boolean tensor (n_outputs); target True <--> positive class.
+    labels: Boolean tensor (n_outputs); label True <--> positive class.
     """
 
     outputs = outputs >= 0
-    assert targets.dtype == torch.bool, targets.dtype
-    acc_total = acc(outputs == targets)
-    acc_on_pos, acc_on_neg = acc(outputs[targets]), acc(~outputs[~targets])
+    assert labels.dtype == torch.bool, labels.dtype
+    acc_total = acc(outputs == labels)
+    acc_on_pos, acc_on_neg = acc(outputs[labels]), acc(~outputs[~labels])
     balanced = 0.5 * (acc_on_pos + acc_on_neg)
     return acc_total, balanced, acc_on_pos, acc_on_neg
 
 
-def print_bin_acc(outputs, targets, model_name):
+def print_bin_acc(outputs, labels, model_name):
     """
     Print binary classification accuracy, balanced accuracy, true positive and true negative rate
 
     outputs: Float tensor (n_outputs); positive output <--> positive class.
-    targets: Boolean tensor (n_outputs); target True <--> positive class.
+    labels: Boolean tensor (n_outputs); label True <--> positive class.
     model_name: String
     """
 
-    acc, balanced, acc_on_pos, acc_on_neg = bin_acc(outputs, targets)
+    acc, balanced, acc_on_pos, acc_on_neg = bin_acc(outputs, labels)
     print(f"{model_name} accuracy:", percent(acc))
     print(f"{model_name} balanced accuracy:", percent(balanced))
-    print(f"{model_name} true positives (as fraction of positive targets):", percent(acc_on_pos))
-    print(f"{model_name} true negatives (as fraction of negative targets):", percent(acc_on_neg))
+    print(f"{model_name} true positives (as fraction of positive labels):", percent(acc_on_pos))
+    print(f"{model_name} true negatives (as fraction of negative labels):", percent(acc_on_neg))
 
 
-def print_multi_acc(outputs, targets, model_name):
+def print_multi_acc(outputs, labels, model_name):
     """
     Multi-class classification accuracy
 
     outputs: Float tensor (n_outputs, n_classes) containing logits
-    targets: Int tensor (n_outputs) containing correct classes
+    labels: Int tensor (n_outputs) containing correct classes
     model_name: String
     """
 
-    print(f"{model_name} accuracy:", percent(acc(outputs.argmax(-1) == targets)))
+    print(f"{model_name} accuracy:", percent(acc(outputs.argmax(-1) == labels)))

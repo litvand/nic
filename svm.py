@@ -22,14 +22,14 @@ class SVM(nn.Module):
         super().__init__()
         self.linear = nn.Linear(len(example_x), 1).to(example_x.device)
         with torch.no_grad():
-            self.linear.weight.fill_(1. / len(example_x))
-            self.linear.bias.fill_(0.)
+            self.linear.weight.fill_(1.0 / len(example_x))
+            self.linear.bias.fill_(0.0)
 
     def forward(self, X):
         return self.linear(X).view(-1)
 
     def fit(self, train_X_pos, train_X_neg, verbose=False, n_epochs=1000, margin=0.5, lr=0.1):
-        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0., lr=lr)
+        optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0.0, lr=lr)
         min_loss = torch.inf
         min_state = None
 
@@ -53,7 +53,7 @@ class SVM(nn.Module):
         return self
 
     def fit_one_class(
-        self, train_X_pos, verbose=False, perfect_train=False, n_epochs=1000, margin=1.
+        self, train_X_pos, verbose=False, perfect_train=False, n_epochs=1000, margin=1.0
     ):
         """
         Trains SVM to give a positive output for all training inputs, while minimizing the total set
@@ -62,7 +62,7 @@ class SVM(nn.Module):
         Gradient descent version of "Support Vector Method for Novelty Detection", Platt et al,
         1999. Replicates sklearn OneClassSVM given same parameters.
 
-        train_X_pos: Positive training inputs; no targets since one class
+        train_X_pos: Positive training inputs; no labels since one class
         perfect_train: Whether to postprocess bias so that the output is positive for all
                        positive training inputs, i.e. prioritize true positives.
         batch_size: Number of training inputs per batch

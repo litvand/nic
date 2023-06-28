@@ -13,12 +13,12 @@ def fgsm_detector_data(imgs, y, trained_model, eps):
     Generate data for training/evaluating FGSM detector.
 
     imgs: Original dataset images (won't be modified)
-    y: Original dataset targets as class indices
+    y: Original dataset labels as class indices
     trained_model: Model trained to classify the original dataset
     eps: FGSM epsilon to use when generating the new dataset
 
     Returns: detector_imgs, detector_y
-             Detector target is 0 if the image is adversarial and 1 otherwise.
+             Detector label is 0 if the image is adversarial and 1 otherwise.
     """
 
     n_imgs = len(imgs)
@@ -27,21 +27,21 @@ def fgsm_detector_data(imgs, y, trained_model, eps):
     detector_imgs = imgs.clone()
     fgsm_(detector_imgs[:n_adv], y[:n_adv], trained_model, eps)
 
-    detector_targets = torch.zeros_like(y)
-    detector_targets[n_adv:].fill_(1)
+    detector_labels = torch.zeros_like(y)
+    detector_labels[n_adv:].fill_(1)
 
     perm = torch.randperm(n_imgs)  # Don't have all adversarial images at the start
-    return detector_imgs[perm], detector_targets[perm]
+    return detector_imgs[perm], detector_labels[perm]
 
 
-def fgsm_(imgs, y, trained_model, eps, aim_class=None):
+def fgsm_(imgs, y, trained_model, eps, target_class=None):
     """
     imgs: Float tensor with size (n_images, n_channels, height, width)
     y: 1d int tensor with each image's class index
-    trained_model: Outputs target logits
+    trained_model: Outputs label logits
     eps: Modification L1 norm
-    aim_class: Class to maximize probability of; if `None`, just minimizes probability of the
-               correct class.
+    target_class: Class to maximize probability of; if `None`, just minimizes probability of the
+                  correct class.
     """
 
     imgs.grad = None
@@ -59,13 +59,13 @@ def fgsm_(imgs, y, trained_model, eps, aim_class=None):
     for i_first in range(0, len(imgs), chunk_size):
         outputs = trained_model(imgs[i_first : i_first + chunk_size])
 
-        if aim_class is None:
-            # Unaimed adversary: Make output differ from the correct target.
+        if target_class is None:
+            # Untargeted adversary: Make output differ from the correct label.
             loss = F.cross_entropy(outputs, y[i_first : i_first + chunk_size])
         else:
-            # Aimed adversary: Make output equal to the aimed class.
+            # Aimed adversary: Make output equal to the targeted class.
             output_prs = F.softmax(outputs, dim=1)
-            loss = torch.mean(output_prs[:, aim_class])
+            loss = torch.mean(output_prs[:, target_class])
 
         loss.backward()
 
@@ -80,18 +80,18 @@ def fgsm_(imgs, y, trained_model, eps, aim_class=None):
     imgs.grad = None
 
 
-def cmp_by_aim(imgs, y, trained_model, eps):
-    """Compare accuracies with different aimed classes. Accuracy with an
-    unaimed adversary should be lower than accuracy with any aimed class."""
+def cmp_by_target(imgs, y, trained_model, eps):
+    """Compare accuracies with different targeted classes. Accuracy with an
+    untargeted adversary should be lower than accuracy with any targeted class."""
 
     with torch.no_grad():
         n_classes = trained_model(imgs[:1]).size(1)
 
     for c in range(n_classes):
-        aim_imgs = imgs.clone()
-        fgsm_(aim_imgs, y, trained_model, eps, aim_class=c)
+        target_imgs = imgs.clone()
+        fgsm_(target_imgs, y, trained_model, eps, target_class=c)
         with torch.no_grad():
-            eval.print_multi_acc(trained_model(aim_imgs), y, f"{c} aimed accuracy")
+            eval.print_multi_acc(trained_model(target_imgs), y, f"{c} targeted accuracy")
 
 
 def cmp_single(i_img, imgs, y, trained_model, eps):
@@ -103,13 +103,13 @@ def cmp_single(i_img, imgs, y, trained_model, eps):
         y[i_img].unsqueeze(0),
         trained_model,
         eps,
-        aim_class=None,
+        target_class=None,
     )
 
     with torch.no_grad():
         original_class = trained_model(imgs[i_img].unsqueeze(0)).argmax(1).item()
         adv_class = trained_model(adv_img.unsqueeze(0)).argmax(1).item()
-        print(f"target {y[i_img].item()}, original {original_class}, adversarial {adv_class}")
+        print(f"label {y[i_img].item()}, original {original_class}, adversarial {adv_class}")
 
         plt.imshow(imgs[i_img][0].cpu(), cmap="gray")
         plt.subplots()
@@ -138,10 +138,10 @@ if __name__ == "__main__":
         eval.print_multi_acc(net(imgs), y, "Original")
 
     eps = 0.2
-    unaimed_imgs = imgs.clone()
-    fgsm_(unaimed_imgs, y, net, eps)
+    untargeted_imgs = imgs.clone()
+    fgsm_(untargeted_imgs, y, net, eps)
     with torch.no_grad():
-        eval.print_multi_acc(net(unaimed_imgs), y, f"Unaimed (eps={eps})")
+        eval.print_multi_acc(net(untargeted_imgs), y, f"Untargeted (eps={eps})")
 
-    # cmp_by_aim(imgs, y, net, eps)
+    # cmp_by_target(imgs, y, net, eps)
     cmp_single(-1, imgs, y, net, eps)
