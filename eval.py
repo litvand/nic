@@ -90,8 +90,4 @@ def print_multi_acc(outputs, targets, model_name):
     model_name: String
     """
 
-    output_classes = outputs.argmax(-1)
-    print(
-        f"{model_name} accuracy:",
-        percent(div_zero(torch.count_nonzero(output_classes == targets), len(targets))),
-    )
+    print(f"{model_name} accuracy:", percent(acc(outputs.argmax(-1) == targets)))

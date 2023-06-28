@@ -181,7 +181,9 @@ def gradient_noise(model, i_x, initial_variance=0.01):
             param.grad.add_(torch.randn_like(param.grad), alpha=std)
 
 
-def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_epochs=1000):
+def logistic_regression(
+    net, data, init=False, verbose=False, lr=1e-3, batch_size=128, n_epochs=100, grad_var=0.
+):
     """
     net: Should output logits for each class (can be single logit for binary classification)
     data: Training and validation inputs and targets, where targets are class indices.
@@ -209,15 +211,14 @@ def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_
     # Restarts seem to increase accuracy on the original validation images, but
     # decrease accuracy on adversarial validation images.
     restarts = True
-    min_lr = 5e-6  # Early stop if LR becomes too low
-    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=0.1)
+    min_lr = lr * 5e-2  # Early stop if LR becomes too low
+    optimizer = get_optimizer(torch.optim.NAdam, net, weight_decay=1e-7, lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, eps=0., min_lr=0.5 * min_lr, verbose=True
     )
     min_loss = float("inf")
     min_state = net.state_dict()  # Not worth deepcopying
-    # TODO: Does resetting the optimizer's state improve accuracy?
-    # min_optim_state = optimizer.state_dict() if restarts else None
+    min_optim_state = optimizer.state_dict() if restarts else None
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_X))
@@ -229,20 +230,22 @@ def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_
             n = len(val_X) if val_X is not None else batch_size
             LSUV_(net, train_X[:n])
 
-        loss_avg, coef_avg = 0., batch_size / len(train_X)
-        loss = None
+        loss, epoch_loss = None, 0.
         for i_x in range(0, len(train_X), batch_size):
             batch_X = train_X[i_x : i_x + batch_size]
             batch_outputs = net_fn(batch_X)
             batch_y = train_y[i_x : i_x + batch_size]
 
             loss = loss_fn(batch_outputs, batch_y)
+            epoch_loss += loss.item()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            gradient_noise(net, epoch * len(train_X) + i_x)
+            if grad_var > 0.:
+                gradient_noise(net, epoch * len(train_X) + i_x, grad_var)
             optimizer.step()
 
-            loss_avg = loss_avg * (1. - coef_avg) + loss.item() * coef_avg
+        n_batches = len(train_X) // batch_size + (len(train_X) % batch_size > 0)
+        epoch_loss /= n_batches
 
         with torch.no_grad():
             net.eval()
@@ -250,12 +253,12 @@ def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_
                 val_outputs = net_fn(val_X)
                 loss = loss_fn(val_outputs, val_y).item()
             else:
-                loss = loss_avg
+                loss = epoch_loss
 
             if loss <= min_loss:
                 min_loss = loss
                 min_state = deepcopy(net.state_dict())
-                # min_optim_state = deepcopy(optimizer.state_dict()) if restarts else None
+                min_optim_state = deepcopy(optimizer.state_dict()) if restarts else None
 
             prev_lr = optimizer.param_groups[0]["lr"]
             scheduler.step(loss)
@@ -263,7 +266,7 @@ def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_
             
             if verbose or was_plateau or epoch == n_epochs - 1:
                 print(f"--- Epoch {epoch} ({len(train_X)//1000}k samples per epoch)")
-                print(f"Training loss running average {loss_avg}")
+                print(f"Epoch average training loss: {epoch_loss}")
                 print_acc(batch_outputs, batch_y, "Last batch")
                 if val_X is not None:
                     print("Validation loss:", loss)
@@ -275,8 +278,8 @@ def logistic_regression(net, data, init=False, verbose=False, batch_size=150, n_
             if restarts and was_plateau:
                 net.load_state_dict(min_state)
                 # Reset optimizer state, but not learning rate
-                # min_optim_state["param_groups"] = optimizer.param_groups
-                # optimizer.load_state_dict(min_optim_state)
+                min_optim_state["param_groups"] = optimizer.param_groups
+                optimizer.load_state_dict(min_optim_state)
 
             net.train()
     net.load_state_dict(min_state)

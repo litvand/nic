@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=20000, n_val=2000, device=device
+        n_train=20000, n_val=10000, device=device
     )
 
     print("--- Model ---")
@@ -268,7 +268,7 @@ if __name__ == "__main__":
     )
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
     train.save(detector, f"nic{n_centers}-onnorestart20k")
-    # train.load(detector, "nic201-onpool20k-ce97eb7455a89a045849b0ccd55c3e6a3bc62763")
+    # train.load(detector, "nic201-onnorestart20k-da96f8f2a03df650d902af73d7951b70371968ac")
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
@@ -317,6 +317,7 @@ i_detector 8
 Training balanced accuracy; true positives and negatives: 33.87% 67.73% 0.01%
 Validation balanced accuracy; true positives and negatives: 43.48% 86.95% 0%
 
+
 Kmeans detector on same net & data:
 --- Validation ---
 Index of first provenance detector: 5
@@ -347,4 +348,36 @@ Validation balanced accuracy; true positives and negatives: 50.0%       100.0% 0
 i_detector 8
 Training balanced accuracy; true positives and negatives: 99.9%       100.0% 99.79%
 Validation balanced accuracy; true positives and negatives: 99.05%       98.4% 99.7%
+
+
+Sklearn SVM except final detector vote:
+--- Validation ---
+Index of first provenance detector: 5
+i_detector 0
+Training balanced accuracy; true positives and negatives: 74.97%       49.95% 99.98%
+Validation balanced accuracy; true positives and negatives: 75.08%       50.2% 99.95%
+i_detector 1
+Training balanced accuracy; true positives and negatives: 70.69%       41.41% 99.96%
+Validation balanced accuracy; true positives and negatives: 58.5%       17.0% 100.0%
+i_detector 2
+Training balanced accuracy; true positives and negatives: 66.81%       50.59% 83.03%
+Validation balanced accuracy; true positives and negatives: 64.83%       45.0% 84.65%
+i_detector 3
+Training balanced accuracy; true positives and negatives: 64.76%       49.57% 79.95%
+Validation balanced accuracy; true positives and negatives: 63.88%       47.05% 80.7%
+i_detector 4
+Training balanced accuracy; true positives and negatives: 67.55%       49.28% 85.82%
+Validation balanced accuracy; true positives and negatives: 67.48%       46.7% 88.25%
+i_detector 5
+Training balanced accuracy; true positives and negatives: 50.5%       1.0% 100.0%
+Validation balanced accuracy; true positives and negatives: 50.0%       0% 100.0%
+i_detector 6
+Training balanced accuracy; true positives and negatives: 50.0%       100.0% 0%
+Validation balanced accuracy; true positives and negatives: 50.0%       100.0% 0%
+i_detector 7
+Training balanced accuracy; true positives and negatives: 50.49%       0.99% 99.99%
+Validation balanced accuracy; true positives and negatives: 50.0%       0% 100.0%
+i_detector 8
+Training balanced accuracy; true positives and negatives: 67.72%       35.44% 99.99%
+Validation balanced accuracy; true positives and negatives: 63.08%       26.15% 100.0%
 """
