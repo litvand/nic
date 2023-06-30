@@ -1,15 +1,17 @@
+import gc
+
 import torch
-from torch import nn
 from sklearn.kernel_approximation import Nystroem
 from sklearn.linear_model import SGDOneClassSVM
+from torch import nn
 
 import adversary
 import classifier
 import mnist
 import train
-from eval import acc, percent, print_balanced_acc
+from eval import acc, percent, print_balanced_acc, batched_activations
 from mixture import DetectorKmeans
-from train import logistic_regression, Normalize, Whiten
+from train import Normalize, Whiten, logistic_regression
 
 
 class SkSVM:
@@ -57,7 +59,7 @@ def cat_layer_pairs(layers):
 
 
 def whitened_layers(whiten, X, trained_model):
-    layers = [X] + trained_model.activations(X)
+    layers = [X.cpu()] + batched_activations(trained_model, X, 5000)
     return [w(l.flatten(1)) for w, l in zip(whiten, layers)]
 
 
@@ -71,8 +73,9 @@ def cat_features(features):
 def fit_detectors(detectors, layers, layers_neg, _detector_type):
     densities, densities_neg = [], []
     for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
-        densities.append(detector.fit_predict(layer))
-        densities_neg.append(detector(layer_neg))
+        gc.collect()
+        densities.append(detector.fit_predict(layer.cuda()))
+        densities_neg.append(detector(layer_neg.cuda()))
 
     return densities, densities_neg
 
@@ -105,7 +108,7 @@ class NIC(nn.Module):
         with torch.no_grad():
             layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
-            self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
+            self.whiten = nn.ModuleList([Whiten(l[0]).cpu() for l in layers])
 
             k = detector_type == "kmeans"
             self.value_detectors = [] if detector_type == "svm" else nn.ModuleList()
@@ -167,15 +170,21 @@ class NIC(nn.Module):
         train_y: Class indices of images in train_X_pos
         trained_model: Model already trained to classify images in train_X_pos
         """
+        print("--- NIC.fit ---")
         trained_model.eval()
 
         with torch.no_grad():
-            layers = [train_X_pos] + trained_model.activations(train_X_pos)
+            layers = [train_X_pos.cpu()] + batched_activations(trained_model, train_X_pos, 5000)
+            print("flatten")
             layers = [l.flatten(1) for l in layers]
+            print("whiten.fit")
             for whiten, layer in zip(self.whiten, layers):
+                gc.collect()
                 whiten.fit(layer)
+            print("whiten")
             layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
 
+            print("whiten neg")
             layers_neg = whitened_layers(self.whiten, train_X_neg, trained_model)
 
         print("--- Value detectors ---")
@@ -186,13 +195,15 @@ class NIC(nn.Module):
         print("--- NIC classifiers ---")
         logits, logits_neg = [], []
         for classifier, layer, layer_neg in zip(self.classifiers, layers, layers_neg):
-            data = ((layer, train_y), (None, None))
-            logistic_regression(classifier, data, init=True, n_epochs=100)
-            logits.append(classifier(layer))
-            logits_neg.append(classifier(layer_neg))
+            gc.collect()
+            data = ((layer.cuda(), train_y), (None, None))
+            logistic_regression(classifier, data, init=True, batch_size=256, n_epochs=100, lr=1e-2)
+            logits.append(classifier(data[0][0]))
+            logits_neg.append(classifier(layer_neg.cuda()))
 
-        logits.append(layers[-1])
-        logits_neg.append(layers_neg[-1])
+        gc.collect()
+        logits.append(layers[-1].cuda())
+        logits_neg.append(layers_neg[-1].cuda())
         pairs, pairs_neg = cat_layer_pairs(logits), cat_layer_pairs(logits_neg)
 
         print("--- Provenance detectors ---")
@@ -201,6 +212,7 @@ class NIC(nn.Module):
         )
 
         print("--- NIC final ---")
+        gc.collect()
         densities = value_densities + prov_densities
         densities_neg = value_densities_neg + prov_densities_neg
 
@@ -236,7 +248,9 @@ class NIC(nn.Module):
                 self.final_detector.weight.fill_(1.0 / densities.size(1))
                 self.final_detector.bias.copy_(0.5 * densities.size(1))
 
-            logistic_regression(self.final_detector, regression_data, n_epochs=100)
+            logistic_regression(
+                self.final_detector, regression_data, batch_size=5096, n_epochs=100, lr=0.1
+            )
             return self
 
         self.final_detector.fit_predict(densities)
@@ -249,12 +263,12 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=20000, n_val=10000, device=device
+        n_train=10000, n_val=2, device=device
     )
 
     print("--- Model ---")
-    trained_model = classifier.PoolNet(train_X_pos[0])
-    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca")
+    trained_model = classifier.CleverHans1()
+    train.load(trained_model, "ch20k-0395d49193d8ccdf48b2d569f6ae8300612d4270")
     trained_model.to(device)
 
     print("--- Detector ---")
@@ -265,7 +279,7 @@ if __name__ == "__main__":
         train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="vote"
     )
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
-    train.save(detector, f"nic{n_centers}-onnorestart20k")
+    train.save(detector, f"nic{n_centers}-onch20k")
     # train.load(detector, "nic201-onnorestart20k-da96f8f2a03df650d902af73d7951b70371968ac")
 
     print("--- Validation ---")

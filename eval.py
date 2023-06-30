@@ -2,6 +2,48 @@ import matplotlib.pyplot as plt
 import torch
 
 
+def batched_forward(f, X, batch_size):
+    return torch.cat(
+        tuple(f(X[i_x : i_x + batch_size]).cpu() for i_x in range(0, len(X), batch_size))
+    )
+
+
+def batched_activations(net, X, batch_size):
+    # a[i_batch][i_layer][i_x]
+    a = []
+    for i_x in range(0, len(X), batch_size):
+        batch = [layer.cpu() for layer in net.activations(X[i_x : i_x + batch_size])]
+        a.append(batch)
+    
+    # a[i_layer][i_x]
+    a = [
+        torch.cat(tuple(a[i_batch][i_layer] for i_batch in range(len(a))))
+        for i_layer in range(len(a[0]))
+    ]
+    return a
+
+
+def activations_at(sequential, X, module_indices):
+    """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
+
+    sequential = list(sequential.children())
+    activations = []
+    for i_module, module in enumerate(sequential):
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        X = module(X)
+        # Support negative indices
+        if i_module in module_indices or i_module - len(sequential) in module_indices:
+            activations.append(X)
+
+    assert len(activations) == len(module_indices), (
+        activations,
+        sequential,
+        module_indices,
+    )
+    return activations
+
 def plot_distr_overlap(a, b, a_name="", b_name=""):
     """
     Plot cumulative distribution functions of two sets of numbers

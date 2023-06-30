@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pykeops.torch as ke
 import torch
-from pycave.bayes import GaussianMixture
+# from pycave.bayes import GaussianMixture
 from torch import linalg, nn
 from torch.nn.functional import softmax
 from torch.distributions.multivariate_normal import MultivariateNormal
@@ -349,7 +349,7 @@ class DetectorKe(nn.Module):
 class DetectorMixture(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
-        self.mixture = GaussianMixture(**kwargs)
+        self.mixture = None #GaussianMixture(**kwargs)
         self.threshold = nn.Parameter(torch.tensor(torch.nan), requires_grad=False)
         self.centers = None
 

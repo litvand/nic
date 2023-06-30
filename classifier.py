@@ -1,7 +1,10 @@
+import gc
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+import eval
 import mnist
 import train
 
@@ -31,8 +34,25 @@ class CleverHans1(nn.Module):
         x = F.relu(self.conv3(x))
         x = x.view(-1, 128 * 4 * 4)
         x = self.fc1(x)
-        x = self.fc2(x)
+        x = self.fc2(x)  # sic
         return x
+    
+    def activations(self, x):
+        a = []
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        a.append(F.relu(self.conv1(x)))
+        a.append(F.relu(self.conv2(a[-1])))
+        a.append(F.relu(self.conv3(a[-1])))
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        a.append(a[-1].view(-1, 128 * 4 * 4))
+        a[-1] = self.fc1(a[-1])
+        a[-1] = self.fc2(a[-1])
+        return a
 
 
 class FullyConnected(nn.Module):
@@ -51,7 +71,7 @@ class FullyConnected(nn.Module):
         return self.seq(img_batch)
 
     def activations(self, img_batch):
-        return train.activations_at(self.seq, img_batch, [3, -1])
+        return eval.activations_at(self.seq, img_batch, [3, -1])
 
 
 class PoolNet(nn.Module):
@@ -91,8 +111,8 @@ class PoolNet(nn.Module):
 
     def activations(self, img_batch):
         """Returns activations of hidden layers before the output"""
-        activations = train.activations_at(self.convs, img_batch, [3, -1])
-        activations.extend(train.activations_at(self.fully_connected, activations[-1], [2, -1]))
+        activations = eval.activations_at(self.convs, img_batch, [3, -1])
+        activations.extend(eval.activations_at(self.fully_connected, activations[-1], [2, -1]))
         return activations
 
 
@@ -105,7 +125,6 @@ if __name__ == "__main__":
     train.save(net, "ch20k")
 
     import eval
-
     with torch.no_grad():
         eval.print_multi_acc(net(data[1][0]), data[1][1], "val")
 

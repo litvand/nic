@@ -39,28 +39,6 @@ def load(model, filename):
     model.load_state_dict(state_dict)
 
 
-def activations_at(sequential, X, module_indices):
-    """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
-
-    sequential = list(sequential.children())
-    activations = []
-    for i_module, module in enumerate(sequential):
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        X = module(X)
-        # Support negative indices
-        if i_module in module_indices or i_module - len(sequential) in module_indices:
-            activations.append(X)
-
-    assert len(activations) == len(module_indices), (
-        activations,
-        sequential,
-        module_indices,
-    )
-    return activations
-
-
 class Normalize(nn.Module):
     def __init__(self, example_x):
         super().__init__()
@@ -111,9 +89,12 @@ class Whiten(nn.Module):
         """
 
         train_X = train_X.flatten(1)
+        print("mean")
         self.mean.copy_(train_X.mean(0))
 
+        print("cov")
         cov = torch.cov((train_X - self.mean).T)
+        print("eig")
         eig_vals, eig_vecs = linalg.eigh(cov)
         torch.mm(eig_vals.clamp(min=1e-6).rsqrt_().diag(), eig_vecs.T, out=self.w)
         if zca:
