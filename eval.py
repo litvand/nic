@@ -12,7 +12,7 @@ def batched_activations(net, X, batch_size):
     # a[i_batch][i_layer][i_x]
     a = []
     for i_x in range(0, len(X), batch_size):
-        batch = [layer.cpu() for layer in net.activations(X[i_x : i_x + batch_size])]
+        batch = [layer for layer in net.activations(X[i_x : i_x + batch_size])]
         a.append(batch)
     
     # a[i_layer][i_x]

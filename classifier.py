@@ -41,6 +41,7 @@ class CleverHans1(nn.Module):
         a = []
         gc.collect()
         torch.cuda.empty_cache()
+        return [self.forward(x)]
         
         a.append(F.relu(self.conv1(x)))
         a.append(F.relu(self.conv2(a[-1])))

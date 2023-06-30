@@ -1,4 +1,7 @@
 import gc
+import mmap
+import os
+from tempfile import mkstemp
 
 import torch
 from sklearn.kernel_approximation import Nystroem
@@ -34,6 +37,97 @@ class SkSVM:
         return torch.tensor(self.svm.predict(X), dtype=dtype, device=device)
 
 
+class TensorFile():
+    """Temporary file containing a list of tensors."""
+
+    def __init__(self):
+        self.fd, _ = mkstemp()
+        self.map = None
+        self.tensors = []  # (start, end, dtype, size)
+
+    def append(self, tensor):
+        assert self.map is None, "Can't append tensors after mapping file"
+
+        if self.dtype is None:
+            self.dtype = tensor.dtype
+        else:
+            assert self.dtype == tensor.dtype, (
+                "All appended tensors must have the same type", self.dtype, tensor.dtype
+            )
+
+        b = bytes(tensor.detach().cpu().numpy())
+        self.n_bytes += len(b)
+        os.write(self.fd, b)
+    
+    def __getitem__(self, i_tensor):
+        """Returns read-only tensor with appended data."""
+
+        if self.map is None:
+            os.fsync(self.fd)
+            self.map = mmap.mmap(
+                self.fd, self.n_bytes, flags=mmap.MAP_PRIVATE, access=mmap.ACCESS_READ
+            )
+        
+        tensor = torch.frombuffer(self.map, dtype=self.dtype).view(shape)
+        n = tensor.numel() * tensor.element_size
+        assert n == self.n_bytes, (tensor.numel(), tensor.element_size, n_bytes)
+        return tensor
+
+    def close(self):
+        if self.map is not None:
+            self.map.close()
+            self.map = None
+
+        os.close(self.fd)
+        self.fd = None
+
+
+def write_layers(trained_model, X):
+    f = TensorFile()
+    batch_size = 5000
+    n_batches = 0
+    n_layers = None
+    for i_x in range(0, len(X), batch_size):
+        n_batches += 1
+        batch = X[i_x : i_x + batch_size]
+        layers = [batch] + trained_model.activations(batch)
+        if n_layers is None:
+            n_layers = len(layers)
+        else:
+            assert n_layers == len(layers), (n_layers, len(layers))
+
+        for l in layers:
+            f.append(l)
+        
+        gc.collect()
+
+    t = f.finish((n_batches, n_layers, *))
+
+    layers = [X[:1]] + trained_model.activations(X[:1])
+    layer_sizes = [layers[i_l].numel() * layers[i_l].element_size for i_l in range(len(layers))]
+    
+    layer_ends = [0]
+    for size in layer_sizes:
+        layer_ends.append(layer_ends[-1] + size)
+
+    
+    
+
+def whitened_layers(whiten, X, trained_model):
+    layers = [X] + batched_activations(trained_model, X, 5000)
+    return [w(l.flatten(1)) for w, l in zip(whiten, layers)]
+
+
+def fit_detectors(detectors, layers, layers_neg, _detector_type):
+    densities, densities_neg = [], []
+    for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
+        gc.collect()
+        densities.append(detector.fit_predict(layer.cuda()))
+        densities_neg.append(detector(layer_neg.cuda()))
+
+    return densities, densities_neg
+
+
 def cat_layer_pairs(layers):
     """
     Concatenate features of each consecutive pair of layers.
@@ -58,26 +152,11 @@ def cat_layer_pairs(layers):
     return pairs
 
 
-def whitened_layers(whiten, X, trained_model):
-    layers = [X.cpu()] + batched_activations(trained_model, X, 5000)
-    return [w(l.flatten(1)) for w, l in zip(whiten, layers)]
-
-
 def cat_features(features):
     """
     List of n_features tensors with shape (n_points) --> tensor with shape (n_points, n_features)
     """
     return torch.cat([f.unsqueeze(1) for f in features], dim=1)
-
-
-def fit_detectors(detectors, layers, layers_neg, _detector_type):
-    densities, densities_neg = [], []
-    for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
-        gc.collect()
-        densities.append(detector.fit_predict(layer.cuda()))
-        densities_neg.append(detector(layer_neg.cuda()))
-
-    return densities, densities_neg
 
 
 class NIC(nn.Module):
@@ -108,7 +187,7 @@ class NIC(nn.Module):
         with torch.no_grad():
             layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
-            self.whiten = nn.ModuleList([Whiten(l[0]).cpu() for l in layers])
+            self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
 
             k = detector_type == "kmeans"
             self.value_detectors = [] if detector_type == "svm" else nn.ModuleList()
@@ -174,7 +253,7 @@ class NIC(nn.Module):
         trained_model.eval()
 
         with torch.no_grad():
-            layers = [train_X_pos.cpu()] + batched_activations(trained_model, train_X_pos, 5000)
+            layers = [train_X_pos] + batched_activations(trained_model, train_X_pos, 5000)
             print("flatten")
             layers = [l.flatten(1) for l in layers]
             print("whiten.fit")
@@ -263,7 +342,7 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=10000, n_val=2, device=device
+        n_train=59000, n_val=2, device=device
     )
 
     print("--- Model ---")
@@ -276,7 +355,7 @@ if __name__ == "__main__":
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
     n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(
-        train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="vote"
+        train_X_pos[0], trained_model, n_centers, detector_type="svm", final_type="svm"
     )
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
     train.save(detector, f"nic{n_centers}-onch20k")
@@ -291,7 +370,8 @@ if __name__ == "__main__":
         train_a_neg = detector.activations(train_X_neg, trained_model)
         val_a_pos = detector.activations(val_X_pos, trained_model)
         val_a_neg = detector.activations(val_X_neg, trained_model)
-        print("Index of first provenance detector:", len(detector.value_detectors))
+        n_value = len(detector.value_detectors)
+        print("Index of first provenance detector:", None if n_value <= 2 else n_value)
         for i_detector in range(len(train_a_pos)):
             print("i_detector", i_detector)
             print_balanced_acc(train_a_pos[i_detector], train_a_neg[i_detector], "Training")
