@@ -96,7 +96,7 @@ class Whiten(nn.Module):
         n_total = self.n_warm + len(train_X)
 
         if self.n_warm == 0:
-            self.mean.copy_(train_X.mean(0)) # Mean of each feature
+            self.mean.copy_(train_X.mean(0))  # Mean of each feature
         else:
             self.mean.mul_(self.n_warm / n_total)
             self.mean.add_(train_X.mean(0), alpha=len(train_X) / n_total)
@@ -105,7 +105,7 @@ class Whiten(nn.Module):
         cov = torch.cov((train_X - self.mean).T, correction=1)
         
         if self.n_warm == 0:
-            self.cov.copy_(cov)
+            self.cov = cov
         else:
             self.cov.mul_((self.n_warm - 1) / (n_total - 1))
             self.cov.add_(cov, alpha=(len(train_X) - 1) / (n_total - 1))

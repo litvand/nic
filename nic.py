@@ -45,7 +45,10 @@ class TensorCache():
     """
 
     def __init__(self, dir=None):
-        self.fd, _ = mkstemp(dir=dir)
+        self.fd, name = mkstemp(dir=dir)
+        # Automatically delete when the file descriptor is closed
+        os.unlink(os.path.join(dir, name))
+        
         self.map = None
         self.tensors = []  # (start, end, dtype, size)
         self.START, self.END, self.DTYPE, self.SIZE = 0, 1, 2, 3
@@ -53,13 +56,14 @@ class TensorCache():
     def append(self, tensor):
         assert self.map is None, "Can't append tensors after reading from file"
 
-        start = self.tensors[-1][self.START] if len(self.tensors) > 0 else 0
-        end = start + tensor.element_size * tensor.numel()
+        start = self.tensors[-1][self.END] if len(self.tensors) > 0 else 0
+        end = start + tensor.element_size() * tensor.numel()
         dtype, size = tensor.dtype, tensor.size()
         
         b = bytes(tensor.detach().cpu().contiguous().numpy())
-        assert len(b) == end - start, (len(b), tensor.element_size, tensor.numel())
+        assert len(b) == end - start, (len(b), tensor.element_size(), tensor.numel())
         
+        os.lseek(self.fd, start, os.SEEK_SET)
         os.write(self.fd, b)
         self.tensors.append((start, end, dtype, size))
     
@@ -89,10 +93,9 @@ class TensorCache():
 
     def _map(self):
         if self.map is None:
+            os.lseek(self.fd, 0, os.SEEK_SET)
             os.fsync(self.fd)
-            self.map = mmap.mmap(
-                self.fd, self.tensors[-1][self.END], flags=mmap.MAP_PRIVATE, access=mmap.ACCESS_READ
-            )
+            self.map = mmap.mmap(self.fd, self.tensors[-1][self.END], access=mmap.ACCESS_READ)
     
     def __len__(self):
         return len(self.tensors)
@@ -123,7 +126,7 @@ class TensorCache():
 
 def cache_layers(whiten, X, trained_model, fit=False):
     cache = TensorCache(dir="./tmp")
-    batch_size = 5000
+    batch_size = 500
     n_batches = 0
     n_layers = None
     for i_x in range(0, len(X), batch_size):
@@ -152,9 +155,10 @@ def cache_layers(whiten, X, trained_model, fit=False):
     flat_cache = TensorCache(dir="./tmp")
     for i_layer in range(n_layers):
         w = whiten[i_layer]
-        flat_cache.append(w(cache[0 * n_layers + i_layer]))
+        print("w device", w.mean.data.device, X.device)
+        flat_cache.append(w(cache[0 * n_layers + i_layer].to(X.device)))
         for i_batch in range(1, n_batches):
-            flat_cache.cat_to_last(w(cache[i_batch * n_layers + i_layer]))
+            flat_cache.cat_to_last(w(cache[i_batch * n_layers + i_layer].to(X.device)))
         
         gc.collect()
     
@@ -303,7 +307,7 @@ class NIC(nn.Module):
             layers = cache_layers(self.whiten, train_X_pos, trained_model, fit=True)
 
             print("whiten neg")
-            layers_neg = whitened_layers(self.whiten, train_X_neg, trained_model)
+            layers_neg = cache_layers(self.whiten, train_X_neg, trained_model)
 
         print("--- Value detectors ---")
         value_densities, value_densities_neg = fit_detectors(
@@ -381,7 +385,7 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=59000, n_val=2, device=device
+        n_train=2000, n_val=2, device=device
     )
 
     print("--- Model ---")
