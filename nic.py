@@ -37,41 +37,80 @@ class SkSVM:
         return torch.tensor(self.svm.predict(X), dtype=dtype, device=device)
 
 
-class TensorFile():
-    """Temporary file containing a list of tensors."""
+class TensorCache():
+    """
+    Temporary file containing a list of read-only tensors.
+    
+    The list can't be modified after reading from it.
+    """
 
-    def __init__(self):
-        self.fd, _ = mkstemp()
+    def __init__(self, dir=None):
+        self.fd, _ = mkstemp(dir=dir)
         self.map = None
         self.tensors = []  # (start, end, dtype, size)
+        self.START, self.END, self.DTYPE, self.SIZE = 0, 1, 2, 3
 
     def append(self, tensor):
-        assert self.map is None, "Can't append tensors after mapping file"
+        assert self.map is None, "Can't append tensors after reading from file"
 
-        if self.dtype is None:
-            self.dtype = tensor.dtype
-        else:
-            assert self.dtype == tensor.dtype, (
-                "All appended tensors must have the same type", self.dtype, tensor.dtype
-            )
-
-        b = bytes(tensor.detach().cpu().numpy())
-        self.n_bytes += len(b)
+        start = self.tensors[-1][self.START] if len(self.tensors) > 0 else 0
+        end = start + tensor.element_size * tensor.numel()
+        dtype, size = tensor.dtype, tensor.size()
+        
+        b = bytes(tensor.detach().cpu().contiguous().numpy())
+        assert len(b) == end - start, (len(b), tensor.element_size, tensor.numel())
+        
         os.write(self.fd, b)
+        self.tensors.append((start, end, dtype, size))
+    
+    def cat_to_last(self, tensor):
+        assert self.map is None, "Can't concatenate to last tensor after reading from file"
+        assert len(self.tensors) > 0, "No tensor to concatenate to"
+        
+        last = self.tensors[-1]
+        assert last[self.DTYPE] == tensor.dtype, (
+            "Must have same type", last[self.DTYPE], tensor.dtype
+        )
+        assert len(last[self.SIZE]) == len(tensor.size()), (
+            "Must have same number of dimensions", last[self.SIZE], tensor.size()
+        )
+        for dim in range(1, len(last[self.SIZE])):
+            assert last[self.SIZE][dim] == tensor.size(dim), (
+                "Must have same shape in dimensions after first", last[self.SIZE], tensor.size()
+            )
+        cat_size = (last[self.SIZE][0] + tensor.size(0), *last[self.SIZE][1:])
+        
+        self.append(tensor)
+        cat_end = self.tensors[-1][self.END]  # Appended tensor end
+        self.tensors.pop()  # Un-append tensor
+        self.tensors[-1] = (
+            self.tensors[-1][self.START], cat_end, self.tensors[-1][self.DTYPE], cat_size
+        )
+
+    def _map(self):
+        if self.map is None:
+            os.fsync(self.fd)
+            self.map = mmap.mmap(
+                self.fd, self.tensors[-1][self.END], flags=mmap.MAP_PRIVATE, access=mmap.ACCESS_READ
+            )
+    
+    def __len__(self):
+        return len(self.tensors)
     
     def __getitem__(self, i_tensor):
         """Returns read-only tensor with appended data."""
 
-        if self.map is None:
-            os.fsync(self.fd)
-            self.map = mmap.mmap(
-                self.fd, self.n_bytes, flags=mmap.MAP_PRIVATE, access=mmap.ACCESS_READ
-            )
-        
-        tensor = torch.frombuffer(self.map, dtype=self.dtype).view(shape)
-        n = tensor.numel() * tensor.element_size
-        assert n == self.n_bytes, (tensor.numel(), tensor.element_size, n_bytes)
+        self._map()
+        info = self.tensors[i_tensor]
+        tensor = torch.frombuffer(
+            self.map[info[self.START] : info[self.END]], dtype=info[self.DTYPE]
+        ).view(info[self.SIZE])
         return tensor
+    
+    def __iter__(self):
+        # OPTIM
+        for i in range(len(self.tensors)):
+            yield self[i]
 
     def close(self):
         if self.map is not None:
@@ -82,8 +121,8 @@ class TensorFile():
         self.fd = None
 
 
-def write_layers(trained_model, X):
-    f = TensorFile()
+def cache_layers(whiten, X, trained_model, fit=False):
+    cache = TensorCache(dir="./tmp")
     batch_size = 5000
     n_batches = 0
     n_layers = None
@@ -94,28 +133,34 @@ def write_layers(trained_model, X):
         if n_layers is None:
             n_layers = len(layers)
         else:
-            assert n_layers == len(layers), (n_layers, len(layers))
+            assert n_layers == len(layers), (n_batches, n_layers, len(layers))
 
-        for l in layers:
-            f.append(l)
+        for i_layer, layer in enumerate(layers):
+            layer = layer.flatten(1)
+            if fit:
+                whiten[i_layer].warm_start(layer)
+            cache.append(layer)
         
         gc.collect()
-
-    t = f.finish((n_batches, n_layers, *))
-
-    layers = [X[:1]] + trained_model.activations(X[:1])
-    layer_sizes = [layers[i_l].numel() * layers[i_l].element_size for i_l in range(len(layers))]
     
-    layer_ends = [0]
-    for size in layer_sizes:
-        layer_ends.append(layer_ends[-1] + size)
+    assert len(cache) == n_batches * n_layers, (len(cache), n_batches, n_layers)
+    if fit:
+        l = torch.empty(0, dtype=X.dtype)
+        for w in whiten:
+            w.fit(l)
 
+    flat_cache = TensorCache(dir="./tmp")
+    for i_layer in range(n_layers):
+        w = whiten[i_layer]
+        flat_cache.append(w(cache[0 * n_layers + i_layer]))
+        for i_batch in range(1, n_batches):
+            flat_cache.cat_to_last(w(cache[i_batch * n_layers + i_layer]))
+        
+        gc.collect()
     
-    
-
-def whitened_layers(whiten, X, trained_model):
-    layers = [X] + batched_activations(trained_model, X, 5000)
-    return [w(l.flatten(1)) for w, l in zip(whiten, layers)]
+    cache.close()
+    assert len(flat_cache) == n_layers, (len(flat_cache), n_layers)
+    return flat_cache
 
 
 def fit_detectors(detectors, layers, layers_neg, _detector_type):
@@ -226,9 +271,11 @@ class NIC(nn.Module):
     def activations(self, X, trained_model):
         trained_model.eval()
 
-        layers = whitened_layers(self.whiten, X, trained_model)
-        value_densities = [v(l) for v, l in zip(self.value_detectors, layers)]
-        logits = [c(l) for c, l in zip(self.classifiers, layers[:-2])] + [layers[-1]]
+        layers = cache_layers(self.whiten, X, trained_model)
+        value_densities = [v(l.to(X.device)) for v, l in zip(self.value_detectors, layers)]
+        logits = [
+            self.classifiers[i](layers[i].to(X.device)) for i in range(len(self.classifiers))
+        ] + [layers[-1]]
         prov_densities = [p(l) for p, l in zip(self.prov_detectors, cat_layer_pairs(logits))]
 
         densities = value_densities + prov_densities
@@ -253,15 +300,7 @@ class NIC(nn.Module):
         trained_model.eval()
 
         with torch.no_grad():
-            layers = [train_X_pos] + batched_activations(trained_model, train_X_pos, 5000)
-            print("flatten")
-            layers = [l.flatten(1) for l in layers]
-            print("whiten.fit")
-            for whiten, layer in zip(self.whiten, layers):
-                gc.collect()
-                whiten.fit(layer)
-            print("whiten")
-            layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
+            layers = cache_layers(self.whiten, train_X_pos, trained_model, fit=True)
 
             print("whiten neg")
             layers_neg = whitened_layers(self.whiten, train_X_neg, trained_model)
@@ -273,16 +312,16 @@ class NIC(nn.Module):
 
         print("--- NIC classifiers ---")
         logits, logits_neg = [], []
-        for classifier, layer, layer_neg in zip(self.classifiers, layers, layers_neg):
+        for i, c in enumerate(self.classifiers):
             gc.collect()
-            data = ((layer.cuda(), train_y), (None, None))
+            data = ((layers[i].to(train_y.device), train_y), (None, None))
             logistic_regression(classifier, data, init=True, batch_size=256, n_epochs=100, lr=1e-2)
             logits.append(classifier(data[0][0]))
-            logits_neg.append(classifier(layer_neg.cuda()))
+            logits_neg.append(classifier(layers_neg[i].to(train_y.device)))
 
         gc.collect()
-        logits.append(layers[-1].cuda())
-        logits_neg.append(layers_neg[-1].cuda())
+        logits.append(layers[len(layers) - 1].to(train_y.device))
+        logits_neg.append(layers_neg[len(layers) - 1].to(train_y.device))
         pairs, pairs_neg = cat_layer_pairs(logits), cat_layer_pairs(logits_neg)
 
         print("--- Provenance detectors ---")
@@ -355,7 +394,7 @@ if __name__ == "__main__":
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
     n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(
-        train_X_pos[0], trained_model, n_centers, detector_type="svm", final_type="svm"
+        train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="vote"
     )
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
     train.save(detector, f"nic{n_centers}-onch20k")

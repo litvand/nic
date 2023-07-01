@@ -79,24 +79,46 @@ class Whiten(nn.Module):
         d = example_x.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
         self.w = nn.Parameter(torch.eye(n_features, device=d), requires_grad=False)
-
-    def fit(self, train_X, zca=True):
+        self.cov = None
+        self.n_warm = 0
+    
+    def warm_start(self, train_X):
         """
+        Update mean and covariance without actually calculating whitening matrix.
+        
         NOTE: If train_X contains images, this calculates separate means for each pixel location.
-
-        train_X: Training inputs
-        zca: True --> ZCA, False --> PCA
         """
+
+        if len(train_X) < 2:
+            return
 
         train_X = train_X.flatten(1)
-        print("mean")
-        self.mean.copy_(train_X.mean(0))
+        n_total = self.n_warm + len(train_X)
 
-        print("cov")
-        cov = torch.cov((train_X - self.mean).T)
+        if self.n_warm == 0:
+            self.mean.copy_(train_X.mean(0)) # Mean of each feature
+        else:
+            self.mean.mul_(self.n_warm / n_total)
+            self.mean.add_(train_X.mean(0), alpha=len(train_X) / n_total)
+
+        # TODO: `self.mean` or just `train_X.mean` in batch covariance calculation?
+        cov = torch.cov((train_X - self.mean).T, correction=1)
+        
+        if self.n_warm == 0:
+            self.cov.copy_(cov)
+        else:
+            self.cov.mul_((self.n_warm - 1) / (n_total - 1))
+            self.cov.add_(cov, alpha=(len(train_X) - 1) / (n_total - 1))
+
+        self.n_warm = n_total
+
+    def fit(self, train_X, zca=True):
+        """Calculate the whitening matrix based on data given so far (here or to `warm_start`)."""
+
+        self.warm_start(train_X)
         print("eig")
-        eig_vals, eig_vecs = linalg.eigh(cov)
-        torch.mm(eig_vals.clamp(min=1e-6).rsqrt_().diag(), eig_vecs.T, out=self.w)
+        eig_vals, eig_vecs = linalg.eigh(self.cov)
+        torch.mm(eig_vals.clamp(min=1e-8).rsqrt_().diag(), eig_vecs.T, out=self.w)
         if zca:
             self.w.copy_(eig_vecs.mm(self.w))
 
