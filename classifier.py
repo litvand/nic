@@ -39,17 +39,13 @@ class CleverHans1(nn.Module):
     
     def activations(self, x):
         a = []
-        gc.collect()
-        torch.cuda.empty_cache()
-        return [self.forward(x)]
         
+        gc.collect()
         a.append(F.relu(self.conv1(x)))
         a.append(F.relu(self.conv2(a[-1])))
         a.append(F.relu(self.conv3(a[-1])))
-
-        gc.collect()
-        torch.cuda.empty_cache()
         
+        gc.collect()
         a.append(a[-1].view(-1, 128 * 4 * 4))
         a[-1] = self.fc1(a[-1])
         a[-1] = self.fc2(a[-1])

@@ -1,3 +1,4 @@
+import gc
 import math
 import time
 from copy import deepcopy
@@ -469,11 +470,17 @@ class DetectorKmeans(nn.Module):
         Retries only if validation data is available.
         """
 
+        train_X_pos = train_X_pos.contiguous()
+        train_X_neg = train_X_neg.contiguous() if train_X_neg is not None else train_X_neg
+        val_X_pos = val_X_pos.contiguous() if val_X_pos is not None else val_X_pos
+        val_X_neg = val_X_neg.contiguous() if val_X_neg is not None else val_X_neg
+
         params = None
         best_acc = 0.0
         best_densities = None
         with torch.no_grad():
             for _ in range(n_retries):
+                gc.collect()
                 kmeans_(self.centers.data, train_X_pos)
                 cluster_var_pr_(self.vars.data, self.prs.data, train_X_pos, self.centers.data)
 
@@ -520,10 +527,10 @@ class DetectorKmeans(nn.Module):
 
 if __name__ == "__main__":
     device = "cpu"
-    fns = [data2d.overlap]
+    fns = [data2d.line]
     # fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 8
+    n_runs = 2
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
@@ -556,9 +563,7 @@ if __name__ == "__main__":
         #     equal_clusters=True,
         #     full_cov=False
         # ).fit(train_X_pos, n_epochs=200, sparsity=0, plot=False)
-        detector = DetectorKmeans(train_X_pos[0], n_centers).fit(
-            train_X_pos, train_X_neg, val_X_pos, val_X_neg
-        )
+        detector = DetectorKmeans(train_X_pos[0], n_centers).fit(train_X_pos)
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(val_X_pos), detector(val_X_neg)

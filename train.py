@@ -76,51 +76,66 @@ class Whiten(nn.Module):
     def __init__(self, example_x):
         super().__init__()
         n_features = example_x.numel()
+        print("whiten n_features:", n_features)
         d = example_x.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
-        self.w = nn.Parameter(torch.eye(n_features, device=d), requires_grad=False)
-        self.cov = None
+        self.w = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
         self.n_warm = 0
     
-    def warm_start(self, train_X):
+    def mean_cov(self, train_X):
         """
         Update mean and covariance without actually calculating whitening matrix.
         
         NOTE: If train_X contains images, this calculates separate means for each pixel location.
+
+        "Formulas for Robust, One-Pass Parallel Computation of Covariances and Arbitrary-Order
+        Statistical Moments", Philippe Pebay, 2008 
         """
 
         if len(train_X) < 2:
             return
 
         train_X = train_X.flatten(1)
-        n_total = self.n_warm + len(train_X)
+        n_new = len(train_X)
+        n_total = self.n_warm + n_new
 
         if self.n_warm == 0:
             self.mean.copy_(train_X.mean(0))  # Mean of each feature
         else:
             self.mean.mul_(self.n_warm / n_total)
-            self.mean.add_(train_X.mean(0), alpha=len(train_X) / n_total)
+            self.mean.add_(train_X.mean(0), alpha=n_new / n_total)
 
         # TODO: `self.mean` or just `train_X.mean` in batch covariance calculation?
-        cov = torch.cov((train_X - self.mean).T, correction=1)
+        train_X = train_X - self.mean
+        gc.collect()
+        print("before whiten cov", torch.cuda.memory_allocated() / 1e6)
+        # Reuse `self.w` memory since it will be overwritten anyway after changing cov.
+        # cov = torch.cov(train_X, correction=1)
+        cov = torch.mm(train_X.T, train_X)
         
         if self.n_warm == 0:
-            self.cov = cov
+            cov.mul_(1.0 / (n_total - 1))
+            self.w.data = cov
         else:
-            self.cov.mul_((self.n_warm - 1) / (n_total - 1))
-            self.cov.add_(cov, alpha=(len(train_X) - 1) / (n_total - 1))
+            self.w.mul_((self.n_warm - 1) / (n_total - 1))
+            self.w.add_(cov, alpha=1.0 / (n_total - 1))
 
         self.n_warm = n_total
 
-    def fit(self, train_X, zca=True):
-        """Calculate the whitening matrix based on data given so far (here or to `warm_start`)."""
+    def fit(self, train_X, zca=True, finish=True):
+        """Calculate the whitening matrix based on data given so far."""
 
-        self.warm_start(train_X)
-        print("eig")
-        eig_vals, eig_vecs = linalg.eigh(self.cov)
-        torch.mm(eig_vals.clamp(min=1e-8).rsqrt_().diag(), eig_vecs.T, out=self.w)
+        self.mean_cov(train_X)
+        if not finish:
+            return self
+
+        self.n_warm = 0
+        # `self.w` contains the covariance matrix
+        eig_vals, eig_vecs = linalg.eigh(self.w)
+        eig_vals.clamp_(min=1e-8).rsqrt_()
+        torch.mul(eig_vals.view(-1, 1).expand_as(eig_vecs), eig_vecs.T, out=self.w)
         if zca:
-            self.w.copy_(eig_vecs.mm(self.w))
+            torch.mm(eig_vecs, self.w, out=self.w)
 
         return self
 
@@ -287,3 +302,36 @@ def logistic_regression(
             net.train()
     net.load_state_dict(min_state)
     net.eval()
+
+
+import gc
+
+
+if __name__ == "__main__":
+    print(torch.cuda.memory_allocated() / 1e6, "X")
+    X = torch.rand((1000, 30_000), dtype=torch.float32, device="cuda")
+    print("X size", X.size())
+    print(torch.cuda.memory_allocated() / 1e6, "eye")
+    eye = torch.eye(X.size(1), dtype=X.dtype, device=X.device)
+    print("eye size", eye.size())
+
+    print(torch.cuda.memory_allocated() / 1e6, "mean")
+    X.sub_(X.mean(0))
+    print("X size", X.size())
+
+    print(torch.cuda.memory_allocated() / 1e6, "mm")
+    cov = torch.mm(X.T, X)
+    cov.mul_(1.0 / len(X))
+    print("cov size", cov.size())
+    
+    print(torch.cuda.memory_allocated() / 1e6, "sub")
+    cov.sub_(eye)
+    print(torch.cuda.memory_allocated() / 1e6, "mean")
+    print("(cov - 1) mean", cov.mean())
+
+    # print(torch.cuda.memory_allocated() / 1e6, "cov")
+    # gc.collect()    
+    # cov = torch.cov(X.T, correction=1)
+    # print("cov size", cov.size())
+    # gc.collect()    
+    print(torch.cuda.memory_allocated() / 1e6, "exit")

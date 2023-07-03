@@ -1,17 +1,15 @@
 import gc
-import mmap
-import os
-from tempfile import mkstemp
 
 import torch
 from sklearn.kernel_approximation import Nystroem
 from sklearn.linear_model import SGDOneClassSVM
-from torch import nn
+from torch import cuda, nn
 
 import adversary
 import classifier
 import mnist
 import train
+from cache import TensorCache
 from eval import acc, percent, print_balanced_acc, batched_activations
 from mixture import DetectorKmeans
 from train import Normalize, Whiten, logistic_regression
@@ -37,99 +35,13 @@ class SkSVM:
         return torch.tensor(self.svm.predict(X), dtype=dtype, device=device)
 
 
-class TensorCache():
-    """
-    Temporary file containing a list of read-only tensors.
-    
-    The list can't be modified after reading from it.
-    """
-
-    def __init__(self, dir=None):
-        self.fd, name = mkstemp(dir=dir)
-        # Automatically delete when the file descriptor is closed
-        os.unlink(os.path.join(dir, name))
-        
-        self.map = None
-        self.tensors = []  # (start, end, dtype, size)
-        self.START, self.END, self.DTYPE, self.SIZE = 0, 1, 2, 3
-
-    def append(self, tensor):
-        assert self.map is None, "Can't append tensors after reading from file"
-
-        start = self.tensors[-1][self.END] if len(self.tensors) > 0 else 0
-        end = start + tensor.element_size() * tensor.numel()
-        dtype, size = tensor.dtype, tensor.size()
-        
-        b = bytes(tensor.detach().cpu().contiguous().numpy())
-        assert len(b) == end - start, (len(b), tensor.element_size(), tensor.numel())
-        
-        os.lseek(self.fd, start, os.SEEK_SET)
-        os.write(self.fd, b)
-        self.tensors.append((start, end, dtype, size))
-    
-    def cat_to_last(self, tensor):
-        assert self.map is None, "Can't concatenate to last tensor after reading from file"
-        assert len(self.tensors) > 0, "No tensor to concatenate to"
-        
-        last = self.tensors[-1]
-        assert last[self.DTYPE] == tensor.dtype, (
-            "Must have same type", last[self.DTYPE], tensor.dtype
-        )
-        assert len(last[self.SIZE]) == len(tensor.size()), (
-            "Must have same number of dimensions", last[self.SIZE], tensor.size()
-        )
-        for dim in range(1, len(last[self.SIZE])):
-            assert last[self.SIZE][dim] == tensor.size(dim), (
-                "Must have same shape in dimensions after first", last[self.SIZE], tensor.size()
-            )
-        cat_size = (last[self.SIZE][0] + tensor.size(0), *last[self.SIZE][1:])
-        
-        self.append(tensor)
-        cat_end = self.tensors[-1][self.END]  # Appended tensor end
-        self.tensors.pop()  # Un-append tensor
-        self.tensors[-1] = (
-            self.tensors[-1][self.START], cat_end, self.tensors[-1][self.DTYPE], cat_size
-        )
-
-    def _map(self):
-        if self.map is None:
-            os.lseek(self.fd, 0, os.SEEK_SET)
-            os.fsync(self.fd)
-            self.map = mmap.mmap(self.fd, self.tensors[-1][self.END], access=mmap.ACCESS_READ)
-    
-    def __len__(self):
-        return len(self.tensors)
-    
-    def __getitem__(self, i_tensor):
-        """Returns read-only tensor with appended data."""
-
-        self._map()
-        info = self.tensors[i_tensor]
-        tensor = torch.frombuffer(
-            self.map[info[self.START] : info[self.END]], dtype=info[self.DTYPE]
-        ).view(info[self.SIZE])
-        return tensor
-    
-    def __iter__(self):
-        # OPTIM
-        for i in range(len(self.tensors)):
-            yield self[i]
-
-    def close(self):
-        if self.map is not None:
-            self.map.close()
-            self.map = None
-
-        os.close(self.fd)
-        self.fd = None
-
-
 def cache_layers(whiten, X, trained_model, fit=False):
     cache = TensorCache(dir="./tmp")
-    batch_size = 500
+    batch_size = 100
     n_batches = 0
     n_layers = None
     for i_x in range(0, len(X), batch_size):
+        print(f"batch {n_batches}:", cuda.memory_allocated() / 1e6)
         n_batches += 1
         batch = X[i_x : i_x + batch_size]
         layers = [batch] + trained_model.activations(batch)
@@ -139,13 +51,13 @@ def cache_layers(whiten, X, trained_model, fit=False):
             assert n_layers == len(layers), (n_batches, n_layers, len(layers))
 
         for i_layer, layer in enumerate(layers):
+            gc.collect()
             layer = layer.flatten(1)
             if fit:
                 whiten[i_layer].warm_start(layer)
             cache.append(layer)
-        
-        gc.collect()
     
+    print(f"{n_batches} batches:", cuda.memory_allocated() / 1e6)
     assert len(cache) == n_batches * n_layers, (len(cache), n_batches, n_layers)
     if fit:
         l = torch.empty(0, dtype=X.dtype)
@@ -155,25 +67,34 @@ def cache_layers(whiten, X, trained_model, fit=False):
     flat_cache = TensorCache(dir="./tmp")
     for i_layer in range(n_layers):
         w = whiten[i_layer]
-        print("w device", w.mean.data.device, X.device)
         flat_cache.append(w(cache[0 * n_layers + i_layer].to(X.device)))
         for i_batch in range(1, n_batches):
             flat_cache.cat_to_last(w(cache[i_batch * n_layers + i_layer].to(X.device)))
         
         gc.collect()
+        print(f"flat layer {i_layer}:", cuda.memory_allocated() / 1e6)
     
     cache.close()
     assert len(flat_cache) == n_layers, (len(flat_cache), n_layers)
     return flat_cache
 
 
-def fit_detectors(detectors, layers, layers_neg, _detector_type):
+def maybe_load(module, filename):
+    return module if module is not None else torch.load("./tmp/" + filename)
+
+
+def fit_detectors(detectors, layers, layers_neg, _detector_type, filename):
+    was_none = detectors is None
+    detectors = maybe_load(detectors, filename)
+
     densities, densities_neg = [], []
     for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
         gc.collect()
         densities.append(detector.fit_predict(layer.cuda()))
         densities_neg.append(detector(layer_neg.cuda()))
 
+    if was_none:
+        torch.save(detectors, "./tmp/" + filename)
     return densities, densities_neg
 
 
@@ -196,7 +117,7 @@ def cat_layer_pairs(layers):
     for i_layer in range(len(layers) - 1):
         i_cur = i_next_features[i_layer] - n_features[i_layer]
         i_next_next = i_next_features[i_layer + 1]
-        pairs.append(cat_all[:, i_cur:i_next_next].contiguous())
+        pairs.append(cat_all[:, i_cur:i_next_next])
 
     return pairs
 
@@ -234,35 +155,49 @@ class NIC(nn.Module):
         assert detector_type in NIC.detector_types, (detector_type, NIC.detector_types)
 
         with torch.no_grad():
+            print(cuda.memory_allocated() / 1e6, "layers")
             layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
+            print(cuda.memory_allocated() / 1e6, "whiten")
             self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
 
             k = detector_type == "kmeans"
+            print(cuda.memory_allocated() / 1e6, "vd")
             self.value_detectors = [] if detector_type == "svm" else nn.ModuleList()
             for l in layers:
                 self.value_detectors.append(
                     DetectorKmeans(l[0], n_centers) if k else SkSVM(n_centers)
                 )
+            # TODO: Allow multiple NIC instances
+            if detector_type != "svm":
+                torch.save(self.value_detectors, "./tmp/vd")
+                self.value_detectors = None
 
             # Last layer already contains logits from trained model, so there's no need to use a
             # classifier. Last layer is also a transformation of the second-to-last layer, so it
             # isn't useful to train a classifier based on the second-to-last layer.
             logits = layers[-1][0]
             n_classes = len(logits)
+            print(cuda.memory_allocated() / 1e6, "classifiers")
             self.classifiers = nn.ModuleList(
                 [nn.Linear(l.size(1), n_classes).to(X.device) for l in layers[:-2]]
             )
+            torch.save(self.classifiers, "./tmp/c")
+            self.classifiers = None
 
-            pair = torch.cat((logits, logits))
+            pair_example = torch.cat((logits, logits))
+            print(cuda.memory_allocated() / 1e6, "pd")
             self.prov_detectors = [] if detector_type == "svm" else nn.ModuleList()
-            for _ in self.classifiers:
+            for _ in layers[:-2]:
                 self.prov_detectors.append(
-                    DetectorKmeans(pair, n_centers) if k else SkSVM(n_centers)
+                    DetectorKmeans(pair_example, n_centers) if k else SkSVM(n_centers)
                 )
+            if detector_type != "svm":
+                torch.save(self.prov_detectors, "./tmp/pd")
+                self.prov_detectors = None
 
             densities = torch.zeros(1, dtype=X.dtype, device=X.device).expand(
-                len(self.value_detectors) + len(self.prov_detectors)
+                len(layers) + len(layers[:-2])
             )
             self.final_normalize = Normalize(densities)
             if final_type in ["vote", "logistic"]:
@@ -275,12 +210,24 @@ class NIC(nn.Module):
     def activations(self, X, trained_model):
         trained_model.eval()
 
-        layers = cache_layers(self.whiten, X, trained_model)
+        whiten = maybe_load(self.whiten, "w")
+        layers = cache_layers(whiten, X, trained_model)
+        whiten = None
+        
+        value_detectors = maybe_load(self.value_detectors, "vd")
         value_densities = [v(l.to(X.device)) for v, l in zip(self.value_detectors, layers)]
+        value_detectors = None
+
+        classifiers = maybe_load(self.classifiers, "c")
         logits = [
             self.classifiers[i](layers[i].to(X.device)) for i in range(len(self.classifiers))
         ] + [layers[-1]]
-        prov_densities = [p(l) for p, l in zip(self.prov_detectors, cat_layer_pairs(logits))]
+        classifiers = None
+
+        logits = cat_layer_pairs(logits)
+        prov_detectors = maybe_load(self.prov_detectors, "pd")
+        prov_densities = [p(l.contiguous()) for p, l in zip(self.prov_detectors, logits)]
+        prov_detectors = None
 
         densities = value_densities + prov_densities
         densities.append(
@@ -305,23 +252,32 @@ class NIC(nn.Module):
 
         with torch.no_grad():
             layers = cache_layers(self.whiten, train_X_pos, trained_model, fit=True)
+            print(cuda.memory_allocated() / 1e6)
 
             print("whiten neg")
             layers_neg = cache_layers(self.whiten, train_X_neg, trained_model)
+            print(cuda.memory_allocated() / 1e6)
+            
+            torch.save(self.whiten, "./tmp/w")
+            self.whiten = None
 
         print("--- Value detectors ---")
         value_densities, value_densities_neg = fit_detectors(
-            self.value_detectors, layers, layers_neg, self.detector_type
+            self.value_detectors, layers, layers_neg, self.detector_type, "vd"
         )
 
         print("--- NIC classifiers ---")
         logits, logits_neg = [], []
-        for i, c in enumerate(self.classifiers):
+        classifiers = maybe_load(self.classifiers, "c")
+        for i, c in enumerate(classifiers):
             gc.collect()
             data = ((layers[i].to(train_y.device), train_y), (None, None))
             logistic_regression(classifier, data, init=True, batch_size=256, n_epochs=100, lr=1e-2)
             logits.append(classifier(data[0][0]))
             logits_neg.append(classifier(layers_neg[i].to(train_y.device)))
+        if self.classifiers is None:
+            torch.save(classifiers, "./tmp/c")
+        classifiers = None
 
         gc.collect()
         logits.append(layers[len(layers) - 1].to(train_y.device))
@@ -330,7 +286,7 @@ class NIC(nn.Module):
 
         print("--- Provenance detectors ---")
         prov_densities, prov_densities_neg = fit_detectors(
-            self.prov_detectors, pairs, pairs_neg, self.detector_type
+            self.prov_detectors, pairs, pairs_neg, self.detector_type, "pd"
         )
 
         print("--- NIC final ---")
@@ -381,25 +337,32 @@ class NIC(nn.Module):
 
 if __name__ == "__main__":
     torch.manual_seed(98765)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if cuda.is_available() else "cpu"
+    print(cuda.memory_allocated() / 1e6)
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
         n_train=2000, n_val=2, device=device
     )
+    print(cuda.memory_allocated() / 1e6)
 
     print("--- Model ---")
     trained_model = classifier.CleverHans1()
     train.load(trained_model, "ch20k-0395d49193d8ccdf48b2d569f6ae8300612d4270")
     trained_model.to(device)
+    print(cuda.memory_allocated() / 1e6)
 
     print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
+    print("fgsm", cuda.memory_allocated() / 1e6)
+
     n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(
         train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="vote"
     )
+    print("NIC", cuda.memory_allocated() / 1e6)
+
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
     train.save(detector, f"nic{n_centers}-onch20k")
     # train.load(detector, "nic201-onnorestart20k-da96f8f2a03df650d902af73d7951b70371968ac")
