@@ -45,31 +45,43 @@ class Normalize(nn.Module):
         n_channels = len(example_x)
         d = example_x.device
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
-        self.inv_scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
+        self.scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
+        self.n_warm = 0
 
-    def fit(self, train_X, unit_range=False, scalar=False):
-        if scalar:
+    def fit(self, train_X, channel_wise=True, finish=True):
+        n_new = len(train_X)
+        if channel_wise:
+            # Average over each channel -- channel dimension first
+            train_X = train_X.transpose(0, 1).view(train_X.size(1), -1)
+        else:
             # Average over all data -- single fake channel
             train_X = train_X.view(1, -1)
-        else:
-            # Average over each channel -- channel dimension first
-            train_X = train_X.transpose(0, 1).flatten(1)
 
-        if unit_range:
-            # Each channel in the range [0, 1] (in training data)
-            self.shift.copy_(train_X.min(1)[0])  # Min of each channel (in training data)
-            self.inv_scale.copy_(1.0 / (train_X.max(1)[0] - self.shift))
+        print("train_X, shift, scale size", train_X.size(), self.shift.size(), self.scale.size())
+        if self.n_warm == 0:
+            torch.mean(train_X, 1, out=self.shift)
         else:
-            # Each channel normally distributed
-            self.shift.copy_(train_X.mean(1))  # Mean of each channel
-            self.inv_scale.copy_(1.0 / train_X.std(1))
+            self.shift.mul_(self.n_warm / (self.n_warm + n_new))
+            self.shift.add_(train_X.sum(1), alpha=1.0 / (self.n_warm + n_new))
 
+        var_sum = (train_X - self.shift.view(-1, 1)).pow(2).sum(-1)
+        if self.n_warm == 0:
+            torch.mul(var_sum, 1.0 / (n_new - 1), out=self.scale)
+        else:
+            self.scale.mul_((self.n_warm - 1) / (self.n_warm + n_new - 1))
+            self.scale.add_(var_sum, alpha=1.0 / (self.n_warm + n_new - 1))
+
+        if finish:
+            self.scale.rsqrt_()
+            self.n_warm = 0
+        else:
+            self.n_warm += n_new
         return self
 
     def forward(self, X):
         size = [1] * X.ndim
         size[1] = len(self.shift)
-        return (X - self.shift.expand(size)) * self.inv_scale.expand(size)
+        return (X - self.shift.view(size)) * self.scale.view(size)
 
 
 class Whiten(nn.Module):
@@ -79,7 +91,7 @@ class Whiten(nn.Module):
         print("whiten n_features:", n_features)
         d = example_x.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
-        self.w = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
+        self.w = nn.Parameter(torch.eye(n_features, device=d), requires_grad=False)
         self.n_warm = 0
     
     def mean_cov(self, train_X):
@@ -305,33 +317,27 @@ def logistic_regression(
 
 
 import gc
+import time
 
 
 if __name__ == "__main__":
     print(torch.cuda.memory_allocated() / 1e6, "X")
-    X = torch.rand((1000, 30_000), dtype=torch.float32, device="cuda")
+    X = torch.rand((100, 1000), dtype=torch.float32, device="cuda")
     print("X size", X.size())
-    print(torch.cuda.memory_allocated() / 1e6, "eye")
-    eye = torch.eye(X.size(1), dtype=X.dtype, device=X.device)
-    print("eye size", eye.size())
 
     print(torch.cuda.memory_allocated() / 1e6, "mean")
     X.sub_(X.mean(0))
-    print("X size", X.size())
 
-    print(torch.cuda.memory_allocated() / 1e6, "mm")
+    print(torch.cuda.memory_allocated() / 1e6, "cov")
     cov = torch.mm(X.T, X)
-    cov.mul_(1.0 / len(X))
+    cov.mul_(1.0 / (len(X) - 1))
     print("cov size", cov.size())
     
-    print(torch.cuda.memory_allocated() / 1e6, "sub")
-    cov.sub_(eye)
-    print(torch.cuda.memory_allocated() / 1e6, "mean")
-    print("(cov - 1) mean", cov.mean())
+    print(torch.cuda.memory_allocated() / 1e6, "eig")
+    X = None
+    t0 = time.time()
+    for _ in range(50):
+        eigvals, eigvecs = torch.linalg.eigh(cov)
+    print("time", time.time() - t0)
 
-    # print(torch.cuda.memory_allocated() / 1e6, "cov")
-    # gc.collect()    
-    # cov = torch.cov(X.T, correction=1)
-    # print("cov size", cov.size())
-    # gc.collect()    
     print(torch.cuda.memory_allocated() / 1e6, "exit")

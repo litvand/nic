@@ -54,15 +54,15 @@ def cache_layers(whiten, X, trained_model, fit=False):
             gc.collect()
             layer = layer.flatten(1)
             if fit:
-                whiten[i_layer].warm_start(layer)
+                whiten[i_layer].fit(layer, finish=False)
             cache.append(layer)
     
     print(f"{n_batches} batches:", cuda.memory_allocated() / 1e6)
     assert len(cache) == n_batches * n_layers, (len(cache), n_batches, n_layers)
     if fit:
-        l = torch.empty(0, dtype=X.dtype)
+        l = torch.empty(0, dtype=X.dtype, device=X.device)
         for w in whiten:
-            w.fit(l)
+            w.fit(l, finish=True)
 
     flat_cache = TensorCache(dir="./tmp")
     for i_layer in range(n_layers):
@@ -159,7 +159,9 @@ class NIC(nn.Module):
             layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
             print(cuda.memory_allocated() / 1e6, "whiten")
-            self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
+            self.whiten = nn.ModuleList([
+                (Whiten if l.size(1) < 1000 else Normalize)(l[0]) for l in layers
+            ])
 
             k = detector_type == "kmeans"
             print(cuda.memory_allocated() / 1e6, "vd")
@@ -257,7 +259,7 @@ class NIC(nn.Module):
             print("whiten neg")
             layers_neg = cache_layers(self.whiten, train_X_neg, trained_model)
             print(cuda.memory_allocated() / 1e6)
-            
+
             torch.save(self.whiten, "./tmp/w")
             self.whiten = None
 
