@@ -1,8 +1,7 @@
 import gc
 
 import torch
-from sklearn.kernel_approximation import Nystroem
-from sklearn.linear_model import SGDOneClassSVM
+import sklearn
 from torch import cuda, nn
 
 import adversary
@@ -10,15 +9,17 @@ import classifier
 import mnist
 import train
 from cache import TensorCache
-from eval import acc, percent, print_balanced_acc, batched_activations
+from eval import acc, percent, print_balanced_acc
 from mixture import DetectorKmeans
 from train import Normalize, Whiten, logistic_regression
 
 
 class SkSVM:
     def __init__(self, n_centers=None):
-        self.nystroem = None if n_centers is None else Nystroem(n_components=n_centers)
-        self.svm = SGDOneClassSVM()
+        self.nystroem = None if n_centers is None else sklearn.kernel_approximation.Nystroem(
+            n_components=n_centers
+        )
+        self.svm = sklearn.linear_model.SGDOneClassSVM()
 
     def fit_predict(self, X):
         dtype, device = X.dtype, X.device
@@ -37,7 +38,7 @@ class SkSVM:
 
 def cache_layers(whiten, X, trained_model, fit=False):
     cache = TensorCache(dir="./tmp")
-    batch_size = 100
+    batch_size = 10000
     n_batches = 0
     n_layers = None
     for i_x in range(0, len(X), batch_size):
@@ -53,6 +54,11 @@ def cache_layers(whiten, X, trained_model, fit=False):
         for i_layer, layer in enumerate(layers):
             gc.collect()
             layer = layer.flatten(1)
+            n_nan = layer.isnan().count_nonzero().item()
+            if n_nan > 0:
+                print(
+                    f"ERROR: layer {i_layer} batch {i_batch} n_nan {n_nan}, numel {layer.numel()}"
+                )
             if fit:
                 whiten[i_layer].fit(layer, finish=False)
             cache.append(layer)
@@ -67,9 +73,45 @@ def cache_layers(whiten, X, trained_model, fit=False):
     flat_cache = TensorCache(dir="./tmp")
     for i_layer in range(n_layers):
         w = whiten[i_layer]
-        flat_cache.append(w(cache[0 * n_layers + i_layer].to(X.device)))
+        for name, param in w.named_parameters():
+            n_nan = param.isnan().count_nonzero().item()
+            if n_nan > 0:
+                print(f"ERROR: whiten {i_layer} {name} n_nan {n_nan}, numel {param.numel()}")
+
+        layer = cache[0 * n_layers + i_layer].to(X.device)
+        n_nan = layer.isnan().count_nonzero().item()
+        if n_nan > 0:
+            print(
+                f"ERROR: layer {i_layer} before whiten, batch 0, " +
+                f"n_nan {n_nan}, numel {layer.numel()}"
+            )
+        layer = w(layer)
+        gc.collect()
+        n_nan = layer.sum(1).isnan().count_nonzero().item()
+        if n_nan > 0:
+            print(
+                f"ERROR: layer {i_layer} after whiten, batch 0, " +
+                f"n_nan {n_nan}, numel {layer.numel()}"
+            )
+        flat_cache.append(layer)
         for i_batch in range(1, n_batches):
-            flat_cache.cat_to_last(w(cache[i_batch * n_layers + i_layer].to(X.device)))
+            layer = cache[i_batch * n_layers + i_layer].to(X.device)
+            gc.collect()
+            n_nan = layer.sum(1).isnan().count_nonzero().item()
+            if n_nan > 0:
+                print(
+                    f"ERROR: layer {i_layer} before whiten, batch {i_batch}, " +
+                    f"n_nan {n_nan}, numel {layer.numel()}"
+                )
+            layer = w(layer)
+            gc.collect()
+            n_nan = layer.sum(1).isnan().count_nonzero().item()
+            if n_nan > 0:
+                print(
+                    f"ERROR: layer {i_layer} after whiten, batch {i_batch}, " +
+                    f"n_nan {n_nan}, numel {layer.numel()}"
+                )
+            flat_cache.cat_to_last(w(layer))
         
         gc.collect()
         print(f"flat layer {i_layer}:", cuda.memory_allocated() / 1e6)
@@ -88,10 +130,16 @@ def fit_detectors(detectors, layers, layers_neg, _detector_type, filename):
     detectors = maybe_load(detectors, filename)
 
     densities, densities_neg = [], []
-    for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
+    for i_layer, (detector, layer, layer_neg) in enumerate(zip(detectors, layers, layers_neg)):
+        print(f"\n- Layer {i_layer} -\n")
+        n_nan = layer.isnan().count_nonzero().item()
+        if n_nan > 0:
+            print(
+                f"ERROR: layer {i_layer} before detector n_nan {n_nan}, numel {layer.numel()}"
+            )
         gc.collect()
-        densities.append(detector.fit_predict(layer.cuda()))
-        densities_neg.append(detector(layer_neg.cuda()))
+        densities.append(detector.fit_predict(layer.contiguous().cuda()))
+        densities_neg.append(detector(layer_neg.contiguous().cuda()))
 
     if was_none:
         torch.save(detectors, "./tmp/" + filename)
@@ -217,18 +265,18 @@ class NIC(nn.Module):
         whiten = None
         
         value_detectors = maybe_load(self.value_detectors, "vd")
-        value_densities = [v(l.to(X.device)) for v, l in zip(self.value_detectors, layers)]
+        value_densities = [v(l.to(X.device)) for v, l in zip(value_detectors, layers)]
         value_detectors = None
 
         classifiers = maybe_load(self.classifiers, "c")
         logits = [
-            self.classifiers[i](layers[i].to(X.device)) for i in range(len(self.classifiers))
-        ] + [layers[-1]]
+            classifiers[i](layers[i].to(X.device)) for i in range(len(classifiers))
+        ] + [layers[-1].to(X.device)]
         classifiers = None
 
         logits = cat_layer_pairs(logits)
         prov_detectors = maybe_load(self.prov_detectors, "pd")
-        prov_densities = [p(l.contiguous()) for p, l in zip(self.prov_detectors, logits)]
+        prov_densities = [p(l.contiguous()) for p, l in zip(prov_detectors, logits)]
         prov_detectors = None
 
         densities = value_densities + prov_densities
@@ -274,9 +322,9 @@ class NIC(nn.Module):
         for i, c in enumerate(classifiers):
             gc.collect()
             data = ((layers[i].to(train_y.device), train_y), (None, None))
-            logistic_regression(classifier, data, init=True, batch_size=256, n_epochs=100, lr=1e-2)
-            logits.append(classifier(data[0][0]))
-            logits_neg.append(classifier(layers_neg[i].to(train_y.device)))
+            logistic_regression(c, data, init=True, batch_size=256, n_epochs=100, lr=1e-2)
+            logits.append(c(data[0][0]))
+            logits_neg.append(c(layers_neg[i].to(train_y.device)))
         if self.classifiers is None:
             torch.save(classifiers, "./tmp/c")
         classifiers = None
@@ -310,7 +358,7 @@ class NIC(nn.Module):
 
         with torch.no_grad():
             densities = cat_features(densities)
-            self.final_normalize.fit(densities, scalar=True)
+            self.final_normalize.fit(densities, channelwise=False)
             densities = self.final_normalize(densities)
 
             densities_neg = self.final_normalize(cat_features(densities_neg))
@@ -344,7 +392,7 @@ if __name__ == "__main__":
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=2000, n_val=2, device=device
+        n_train=20000, n_val=2000, device=device
     )
     print(cuda.memory_allocated() / 1e6)
 
@@ -378,8 +426,7 @@ if __name__ == "__main__":
         train_a_neg = detector.activations(train_X_neg, trained_model)
         val_a_pos = detector.activations(val_X_pos, trained_model)
         val_a_neg = detector.activations(val_X_neg, trained_model)
-        n_value = len(detector.value_detectors)
-        print("Index of first provenance detector:", None if n_value <= 2 else n_value)
+        print("Index of first provenance detector:", (len(train_a_pos) + 1) // 2)
         for i_detector in range(len(train_a_pos)):
             print("i_detector", i_detector)
             print_balanced_acc(train_a_pos[i_detector], train_a_neg[i_detector], "Training")

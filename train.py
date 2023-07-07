@@ -47,10 +47,13 @@ class Normalize(nn.Module):
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
         self.scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
         self.n_warm = 0
-
-    def fit(self, train_X, channel_wise=True, finish=True):
+    
+    def mean_var(self, train_X, channelwise):
         n_new = len(train_X)
-        if channel_wise:
+        if n_new < 2:
+            return
+
+        if channelwise:
             # Average over each channel -- channel dimension first
             train_X = train_X.transpose(0, 1).view(train_X.size(1), -1)
         else:
@@ -70,12 +73,14 @@ class Normalize(nn.Module):
         else:
             self.scale.mul_((self.n_warm - 1) / (self.n_warm + n_new - 1))
             self.scale.add_(var_sum, alpha=1.0 / (self.n_warm + n_new - 1))
+        
+        self.n_warm += n_new
 
+    def fit(self, train_X, channelwise=True, finish=True):
+        self.mean_var(train_X, channelwise)
         if finish:
             self.scale.rsqrt_()
             self.n_warm = 0
-        else:
-            self.n_warm += n_new
         return self
 
     def forward(self, X):
@@ -252,19 +257,18 @@ def logistic_regression(
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_X))
-        train_X, train_y = train_X[perm], train_y[perm]
 
         if init and epoch == 0:
             # GPU memory must be large enough to evaluate all validation X without gradients,
             # so we can reuse that as an upper bound on the number of X to give to LSUV.
             n = len(val_X) if val_X is not None else batch_size
-            LSUV_(net, train_X[:n])
+            LSUV_(net, train_X[perm[:n]])
 
         loss, epoch_loss = None, 0.0
         for i_x in range(0, len(train_X), batch_size):
-            batch_X = train_X[i_x : i_x + batch_size]
+            batch_X = train_X[perm[i_x : i_x + batch_size]]
             batch_outputs = net_fn(batch_X)
-            batch_y = train_y[i_x : i_x + batch_size]
+            batch_y = train_y[perm[i_x : i_x + batch_size]]
 
             loss = loss_fn(batch_outputs, batch_y)
             epoch_loss += loss.item()

@@ -485,13 +485,14 @@ class DetectorKmeans(nn.Module):
                 cluster_var_pr_(self.vars.data, self.prs.data, train_X_pos, self.centers.data)
 
                 train_densities = self.density(train_X_pos)
+                
                 nans = train_X_pos[train_densities.isnan()]
                 if len(nans) > 0:
                     print(len(train_X_pos), "ERROR: nans", len(nans), nans)
                     print(
                         "[self.vars], [self.prs]",
-                        f"[{round_tensor(self.vars.min())}-{round_tensor(self.vars.max())}]",
-                        f"[{round_tensor(self.prs.min())}-{round_tensor(self.prs.max())}]",
+                        f"[{round_tensor(self.vars.min())} .. {round_tensor(self.vars.max())}]",
+                        f"[{round_tensor(self.prs.min())} .. {round_tensor(self.prs.max())}]",
                     )
                     continue
 
@@ -508,15 +509,16 @@ class DetectorKmeans(nn.Module):
                 else:
                     self.threshold.copy_(train_densities.min())
 
-                if n_retries > 1 and val_X_pos is not None and val_X_neg is not None:
-                    pos_acc = acc(self.density(val_X_pos) > self.threshold)
-                    neg_acc = acc(self.density(val_X_neg) <= self.threshold)
-                    val_acc = 0.5 * (pos_acc + neg_acc)
-                    if val_acc > best_acc:
-                        params = all_params(self)
-                        best_acc = val_acc
-                        best_densities = train_densities
-                else:
+                best_densities = train_densities if best_densities is None else best_densities
+                if n_retries < 2 or val_X_pos is None or val_X_neg is None:
+                    break
+
+                pos_acc = acc(self.density(val_X_pos) > self.threshold)
+                neg_acc = acc(self.density(val_X_neg) <= self.threshold)
+                val_acc = 0.5 * (pos_acc + neg_acc)
+                if val_acc > best_acc:
+                    params = all_params(self)
+                    best_acc = val_acc
                     best_densities = train_densities
 
         set_params(self, params)

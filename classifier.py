@@ -70,7 +70,7 @@ class FullyConnected(nn.Module):
     def activations(self, img_batch):
         return eval.activations_at(self.seq, img_batch, [3, -1])
 
-
+    
 class PoolNet(nn.Module):
     # http://yann.lecun.com/exdb/publis/pdf/ranzato-cvpr-07.pdf
     def __init__(self, example_img):

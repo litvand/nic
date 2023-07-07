@@ -94,22 +94,31 @@ class TensorCache():
 if __name__ == "__main__":
     print(torch.cuda.memory_allocated() / 1e6, "x")
     x = torch.ones(int(1e7), dtype=torch.float32, device="cuda")
+
     print(torch.cuda.memory_allocated() / 1e6, "c")
     c = TensorCache(dir="./tmp")
+    
     print(torch.cuda.memory_allocated() / 1e6, "append")
     c.append(x)
+    
     print(torch.cuda.memory_allocated() / 1e6, "x = None")
     x = None
+    
     print(torch.cuda.memory_allocated() / 1e6, "collect")
     gc.collect()
+    
     print(torch.cuda.memory_allocated() / 1e6, "empty")
     torch.cuda.empty_cache()
+    
     print(torch.cuda.memory_allocated() / 1e6, "x")
     x = c[0].cuda()
+    
     print(torch.cuda.memory_allocated() / 1e6, "close")
     c.close()
+    
     print(torch.cuda.memory_allocated() / 1e6, "c = None")
     c = None
+    
     print(torch.cuda.memory_allocated() / 1e6, "collect")
     gc.collect()
     print(torch.cuda.memory_allocated() / 1e6, "exit")
