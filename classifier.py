@@ -36,16 +36,14 @@ class CleverHans1(nn.Module):
         x = self.fc1(x)
         x = self.fc2(x)  # sic
         return x
-    
+
     def activations(self, x):
         a = []
-        
-        gc.collect()
+
         a.append(F.relu(self.conv1(x)))
         a.append(F.relu(self.conv2(a[-1])))
         a.append(F.relu(self.conv3(a[-1])))
-        
-        gc.collect()
+
         a.append(a[-1].view(-1, 128 * 4 * 4))
         a[-1] = self.fc1(a[-1])
         a[-1] = self.fc2(a[-1])
@@ -70,7 +68,7 @@ class FullyConnected(nn.Module):
     def activations(self, img_batch):
         return eval.activations_at(self.seq, img_batch, [3, -1])
 
-    
+
 class PoolNet(nn.Module):
     # http://yann.lecun.com/exdb/publis/pdf/ranzato-cvpr-07.pdf
     def __init__(self, example_img):
@@ -122,6 +120,7 @@ if __name__ == "__main__":
     train.save(net, "ch20k")
 
     import eval
+
     with torch.no_grad():
         eval.print_multi_acc(net(data[1][0]), data[1][1], "val")
 

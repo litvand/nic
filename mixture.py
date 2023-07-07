@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pykeops.torch as ke
 import torch
+
 # from pycave.bayes import GaussianMixture
 from torch import linalg, nn
 from torch.nn.functional import softmax
@@ -350,7 +351,7 @@ class DetectorKe(nn.Module):
 class DetectorMixture(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
-        self.mixture = None #GaussianMixture(**kwargs)
+        self.mixture = None  # GaussianMixture(**kwargs)
         self.threshold = nn.Parameter(torch.tensor(torch.nan), requires_grad=False)
         self.centers = None
 
@@ -480,12 +481,10 @@ class DetectorKmeans(nn.Module):
         best_densities = None
         with torch.no_grad():
             for _ in range(n_retries):
-                gc.collect()
                 kmeans_(self.centers.data, train_X_pos)
                 cluster_var_pr_(self.vars.data, self.prs.data, train_X_pos, self.centers.data)
 
                 train_densities = self.density(train_X_pos)
-                
                 nans = train_X_pos[train_densities.isnan()]
                 if len(nans) > 0:
                     print(len(train_X_pos), "ERROR: nans", len(nans), nans)

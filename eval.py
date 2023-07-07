@@ -1,3 +1,5 @@
+import gc
+
 import matplotlib.pyplot as plt
 import torch
 
@@ -14,7 +16,7 @@ def batched_activations(net, X, batch_size):
     for i_x in range(0, len(X), batch_size):
         batch = [layer for layer in net.activations(X[i_x : i_x + batch_size])]
         a.append(batch)
-    
+
     # a[i_layer][i_x]
     a = [
         torch.cat(tuple(a[i_batch][i_layer] for i_batch in range(len(a))))
@@ -43,6 +45,7 @@ def activations_at(sequential, X, module_indices):
         module_indices,
     )
     return activations
+
 
 def plot_distr_overlap(a, b, a_name="", b_name=""):
     """

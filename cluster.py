@@ -99,52 +99,14 @@ def kmeans_(centers, train_X, accuracy=0.9999):
     train_X: Training points (n_points, n_features)
     """
 
-    nans = train_X[train_X.isnan().any(1)]
-    if len(nans) > 0:
-        print("ERROR: kmeans X nans", len(nans), nans)
-
     if len(centers) >= len(train_X):
         centers[: len(train_X)] = train_X[:]
-        centers[len(train_X) :] = centers[0]
+        centers[len(train_X) :] = train_X[0]
         return
 
     i_centers = torch.randperm(len(train_X), device=train_X.device)[: len(centers)]
     torch.index_select(train_X, 0, i_centers, out=centers)
-
-    nans = centers[centers.isnan().any(1)]
-    if len(nans) > 0:
-        print("ERROR: kmeans before lloyd center nans", len(nans), nans)
-
     kmeans_lloyd_(centers, train_X, accuracy)
-
-    nans = centers[centers.isnan().any(1)]
-    if len(nans) > 0:
-        print("ERROR: kmeans after lloyd center nans", len(nans), nans)
-
-
-# 20000 ERROR: nans 20000 tensor([[-158.6932, -248.8272, -188.2424,  ...,       nan,       nan,
-#                nan],
-#         [ 609.0203,   98.0622,   36.1597,  ...,       nan,       nan,
-#                nan],
-#         [-353.9513,   14.8138, -273.9987,  ...,       nan,       nan,
-#                nan],
-#         ...,
-#         [-270.9937,  421.8418, -179.6952,  ...,       nan,       nan,
-#                nan],
-#         [ -51.8414,  110.3534,  -65.8286,  ...,       nan,       nan,
-#                nan],
-#         [-146.7407,  116.8284,  744.9962,  ...,       nan,       nan,
-#                nan]], device='cuda:0')
-# [self.vars], [self.prs] [-8.46614-inf] [0.0-1.0]
-# 20000 ERROR: nans 20000 tensor([[    nan,     nan,     nan,  ...,  0.3977, -0.1686,  0.0607],
-#         [    nan,     nan,     nan,  ..., -1.2579, -0.4578,  0.0525],
-#         [    nan,     nan,     nan,  ..., -0.2238, -0.9722, -0.8991],
-#         ...,
-#         [    nan,     nan,     nan,  ..., -0.6744, -0.6888, -1.2589],
-#         [    nan,     nan,     nan,  ..., -0.4332, -0.1978,  0.7366],
-#         [    nan,     nan,     nan,  ..., -1.5192, -0.2826, -0.3932]],
-#        device='cuda:0')
-# [self.vars], [self.prs] [-4.81049-inf] [0.0-1.0]
 
 
 def cluster_var_pr_(vars, prs, train_X, centers, min_var=1e-8):

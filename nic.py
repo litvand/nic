@@ -16,8 +16,10 @@ from train import Normalize, Whiten, logistic_regression
 
 class SkSVM:
     def __init__(self, n_centers=None):
-        self.nystroem = None if n_centers is None else sklearn.kernel_approximation.Nystroem(
-            n_components=n_centers
+        self.nystroem = (
+            None
+            if n_centers is None
+            else sklearn.kernel_approximation.Nystroem(n_components=n_centers)
         )
         self.svm = sklearn.linear_model.SGDOneClassSVM()
 
@@ -42,7 +44,6 @@ def cache_layers(whiten, X, trained_model, fit=False):
     n_batches = 0
     n_layers = None
     for i_x in range(0, len(X), batch_size):
-        print(f"batch {n_batches}:", cuda.memory_allocated() / 1e6)
         n_batches += 1
         batch = X[i_x : i_x + batch_size]
         layers = [batch] + trained_model.activations(batch)
@@ -52,18 +53,11 @@ def cache_layers(whiten, X, trained_model, fit=False):
             assert n_layers == len(layers), (n_batches, n_layers, len(layers))
 
         for i_layer, layer in enumerate(layers):
-            gc.collect()
             layer = layer.flatten(1)
-            n_nan = layer.isnan().count_nonzero().item()
-            if n_nan > 0:
-                print(
-                    f"ERROR: layer {i_layer} batch {i_batch} n_nan {n_nan}, numel {layer.numel()}"
-                )
             if fit:
                 whiten[i_layer].fit(layer, finish=False)
             cache.append(layer)
-    
-    print(f"{n_batches} batches:", cuda.memory_allocated() / 1e6)
+
     assert len(cache) == n_batches * n_layers, (len(cache), n_batches, n_layers)
     if fit:
         l = torch.empty(0, dtype=X.dtype, device=X.device)
@@ -73,49 +67,42 @@ def cache_layers(whiten, X, trained_model, fit=False):
     flat_cache = TensorCache(dir="./tmp")
     for i_layer in range(n_layers):
         w = whiten[i_layer]
-        for name, param in w.named_parameters():
-            n_nan = param.isnan().count_nonzero().item()
-            if n_nan > 0:
-                print(f"ERROR: whiten {i_layer} {name} n_nan {n_nan}, numel {param.numel()}")
 
         layer = cache[0 * n_layers + i_layer].to(X.device)
-        n_nan = layer.isnan().count_nonzero().item()
-        if n_nan > 0:
-            print(
-                f"ERROR: layer {i_layer} before whiten, batch 0, " +
-                f"n_nan {n_nan}, numel {layer.numel()}"
-            )
-        layer = w(layer)
-        gc.collect()
         n_nan = layer.sum(1).isnan().count_nonzero().item()
         if n_nan > 0:
             print(
-                f"ERROR: layer {i_layer} after whiten, batch 0, " +
-                f"n_nan {n_nan}, numel {layer.numel()}"
+                f"ERROR: layer {i_layer} before whiten, batch 0, "
+                + f"n_nan {n_nan}, numel {layer.numel()}"
+            )
+
+        layer = w(layer)
+        n_nan = layer.sum(1).isnan().count_nonzero().item()
+        if n_nan > 0:
+            print(
+                f"ERROR: layer {i_layer} after whiten, batch 0, "
+                + f"n_nan {n_nan}, numel {layer.numel()}"
             )
         flat_cache.append(layer)
+
         for i_batch in range(1, n_batches):
             layer = cache[i_batch * n_layers + i_layer].to(X.device)
-            gc.collect()
             n_nan = layer.sum(1).isnan().count_nonzero().item()
             if n_nan > 0:
                 print(
-                    f"ERROR: layer {i_layer} before whiten, batch {i_batch}, " +
-                    f"n_nan {n_nan}, numel {layer.numel()}"
+                    f"ERROR: layer {i_layer} before whiten, batch {i_batch}, "
+                    + f"n_nan {n_nan}, numel {layer.numel()}"
                 )
+            
             layer = w(layer)
-            gc.collect()
             n_nan = layer.sum(1).isnan().count_nonzero().item()
             if n_nan > 0:
                 print(
-                    f"ERROR: layer {i_layer} after whiten, batch {i_batch}, " +
-                    f"n_nan {n_nan}, numel {layer.numel()}"
+                    f"ERROR: layer {i_layer} after whiten, batch {i_batch}, "
+                    + f"n_nan {n_nan}, numel {layer.numel()}"
                 )
-            flat_cache.cat_to_last(w(layer))
-        
-        gc.collect()
-        print(f"flat layer {i_layer}:", cuda.memory_allocated() / 1e6)
-    
+            flat_cache.cat_to_last(layer)
+
     cache.close()
     assert len(flat_cache) == n_layers, (len(flat_cache), n_layers)
     return flat_cache
@@ -131,13 +118,7 @@ def fit_detectors(detectors, layers, layers_neg, _detector_type, filename):
 
     densities, densities_neg = [], []
     for i_layer, (detector, layer, layer_neg) in enumerate(zip(detectors, layers, layers_neg)):
-        print(f"\n- Layer {i_layer} -\n")
-        n_nan = layer.isnan().count_nonzero().item()
-        if n_nan > 0:
-            print(
-                f"ERROR: layer {i_layer} before detector n_nan {n_nan}, numel {layer.numel()}"
-            )
-        gc.collect()
+        print(f"- Layer {i_layer} -")
         densities.append(detector.fit_predict(layer.contiguous().cuda()))
         densities_neg.append(detector(layer_neg.contiguous().cuda()))
 
@@ -189,7 +170,7 @@ class NIC(nn.Module):
     """
 
     detector_types = ["kmeans", "svm"]
-    final_types = ["vote", "logistic", "svm"]
+    final_types = ["min", "vote", "logistic", "svm"]
 
     def __init__(
         self, example_x, trained_model, n_centers, detector_type="kmeans", final_type="vote"
@@ -203,16 +184,17 @@ class NIC(nn.Module):
         assert detector_type in NIC.detector_types, (detector_type, NIC.detector_types)
 
         with torch.no_grad():
-            print(cuda.memory_allocated() / 1e6, "layers")
             layers = [X] + trained_model.activations(X)
             layers = [l.flatten(1) for l in layers]
-            print(cuda.memory_allocated() / 1e6, "whiten")
-            self.whiten = nn.ModuleList([
-                (Whiten if l.size(1) < 1000 else Normalize)(l[0]) for l in layers
-            ])
+            self.whiten = nn.ModuleList(
+                [
+                    # (Whiten if l.size(1) < 1000 else Normalize)(l[0]) for l in layers
+                    Normalize(l[0])
+                    for l in layers
+                ]
+            )
 
             k = detector_type == "kmeans"
-            print(cuda.memory_allocated() / 1e6, "vd")
             self.value_detectors = [] if detector_type == "svm" else nn.ModuleList()
             for l in layers:
                 self.value_detectors.append(
@@ -228,7 +210,6 @@ class NIC(nn.Module):
             # isn't useful to train a classifier based on the second-to-last layer.
             logits = layers[-1][0]
             n_classes = len(logits)
-            print(cuda.memory_allocated() / 1e6, "classifiers")
             self.classifiers = nn.ModuleList(
                 [nn.Linear(l.size(1), n_classes).to(X.device) for l in layers[:-2]]
             )
@@ -236,7 +217,6 @@ class NIC(nn.Module):
             self.classifiers = None
 
             pair_example = torch.cat((logits, logits))
-            print(cuda.memory_allocated() / 1e6, "pd")
             self.prov_detectors = [] if detector_type == "svm" else nn.ModuleList()
             for _ in layers[:-2]:
                 self.prov_detectors.append(
@@ -250,7 +230,9 @@ class NIC(nn.Module):
                 len(layers) + len(layers[:-2])
             )
             self.final_normalize = Normalize(densities)
-            if final_type in ["vote", "logistic"]:
+            if final_type == "min":
+                self.final_detector = None
+            elif final_type in ["vote", "logistic"]:
                 self.final_detector = nn.Linear(len(densities), 1).to(X.device)
             elif final_type == "svm":
                 self.final_detector = SkSVM(None)
@@ -263,15 +245,15 @@ class NIC(nn.Module):
         whiten = maybe_load(self.whiten, "w")
         layers = cache_layers(whiten, X, trained_model)
         whiten = None
-        
+
         value_detectors = maybe_load(self.value_detectors, "vd")
         value_densities = [v(l.to(X.device)) for v, l in zip(value_detectors, layers)]
         value_detectors = None
 
         classifiers = maybe_load(self.classifiers, "c")
-        logits = [
-            classifiers[i](layers[i].to(X.device)) for i in range(len(classifiers))
-        ] + [layers[-1].to(X.device)]
+        logits = [classifiers[i](layers[i].to(X.device)) for i in range(len(classifiers))] + [
+            layers[-1].to(X.device)
+        ]
         classifiers = None
 
         logits = cat_layer_pairs(logits)
@@ -280,8 +262,9 @@ class NIC(nn.Module):
         prov_detectors = None
 
         densities = value_densities + prov_densities
+        d = self.final_normalize(cat_features(densities))
         densities.append(
-            self.final_detector(self.final_normalize(cat_features(densities))).view(-1)
+            d.min(-1)[0] if self.final_type == "min" else self.final_detector(d).view(-1)
         )
         return densities
 
@@ -302,11 +285,9 @@ class NIC(nn.Module):
 
         with torch.no_grad():
             layers = cache_layers(self.whiten, train_X_pos, trained_model, fit=True)
-            print(cuda.memory_allocated() / 1e6)
 
-            print("whiten neg")
+            print("whiten neg", cuda.memory_allocated() / 1e9)
             layers_neg = cache_layers(self.whiten, train_X_neg, trained_model)
-            print(cuda.memory_allocated() / 1e6)
 
             torch.save(self.whiten, "./tmp/w")
             self.whiten = None
@@ -320,7 +301,6 @@ class NIC(nn.Module):
         logits, logits_neg = [], []
         classifiers = maybe_load(self.classifiers, "c")
         for i, c in enumerate(classifiers):
-            gc.collect()
             data = ((layers[i].to(train_y.device), train_y), (None, None))
             logistic_regression(c, data, init=True, batch_size=256, n_epochs=100, lr=1e-2)
             logits.append(c(data[0][0]))
@@ -329,7 +309,6 @@ class NIC(nn.Module):
             torch.save(classifiers, "./tmp/c")
         classifiers = None
 
-        gc.collect()
         logits.append(layers[len(layers) - 1].to(train_y.device))
         logits_neg.append(layers_neg[len(layers) - 1].to(train_y.device))
         pairs, pairs_neg = cat_layer_pairs(logits), cat_layer_pairs(logits_neg)
@@ -340,7 +319,6 @@ class NIC(nn.Module):
         )
 
         print("--- NIC final ---")
-        gc.collect()
         densities = value_densities + prov_densities
         densities_neg = value_densities_neg + prov_densities_neg
 
@@ -388,34 +366,29 @@ class NIC(nn.Module):
 if __name__ == "__main__":
     torch.manual_seed(98765)
     device = "cuda" if cuda.is_available() else "cpu"
-    print(cuda.memory_allocated() / 1e6)
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
         n_train=20000, n_val=2000, device=device
     )
-    print(cuda.memory_allocated() / 1e6)
 
     print("--- Model ---")
     trained_model = classifier.CleverHans1()
     train.load(trained_model, "ch20k-0395d49193d8ccdf48b2d569f6ae8300612d4270")
     trained_model.to(device)
-    print(cuda.memory_allocated() / 1e6)
 
     print("--- Detector ---")
     train_X_neg = train_X_pos.clone()
     adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
-    print("fgsm", cuda.memory_allocated() / 1e6)
 
     n_centers = 1 + len(train_X_pos) // 100
     detector = NIC(
         train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="vote"
     )
-    print("NIC", cuda.memory_allocated() / 1e6)
 
     detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
-    train.save(detector, f"nic{n_centers}-onch20k")
-    # train.load(detector, "nic201-onnorestart20k-da96f8f2a03df650d902af73d7951b70371968ac")
+    torch.save(detector, f"./tmp/nic")
+    # detector = torch.load(f"./tmp/nic")
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
