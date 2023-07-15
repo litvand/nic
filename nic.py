@@ -346,9 +346,10 @@ if __name__ == "__main__":
     )
 
     print("--- Model ---")
-    trained_model = classifier.CleverHansA()
-    train.load(trained_model, "ChA20k-0395d49193d8ccdf48b2d569f6ae8300612d4270")
+    trained_model = classifier.PoolNet(train_X_pos[0])
+    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca")
     trained_model.to(device)
+    print_multi_acc(trained_model(val_X_pos), val_y, "trained_model validation")
 
     print("--- Detector ---")
 
@@ -356,11 +357,11 @@ if __name__ == "__main__":
     detector = NIC(train_X_pos[0], trained_model, n_centers, detector_type="kmeans")
 
     # detector.fit(train_X_pos, train_y, trained_model)
-    # train.save(detector, f"nic{n_centers}-onChA20k")
-    train.load(detector, f"nic201-onChA20k-b6eab93ff6bd26e3262b5f124c8630c31ad6cc6f")
+    # train.save(detector, f"nic{n_centers}-onPool20k")
+    train.load(detector, f"nic201-onPool20k-5113214ed23a3231ef757ad0b073e21fc780b95a")
 
     print("--- Validation ---")
-    eps = 0.2
+    eps = 0.1
     sanity_check = False
     if sanity_check:
         # Should be equivalent to foolbox FGSM:
@@ -387,6 +388,8 @@ if __name__ == "__main__":
         if sanity_check:
             train_a_pos = tuple(detector.activations(train_X_pos, trained_model))
             val_a_neg = tuple(detector.activations(val_X_neg, trained_model))
+            print("Index of first provenance detector:", len(detector.value_detectors))
+        
         val_a_pos = tuple(detector.activations(val_X_pos, trained_model))
         val_a_fb = tuple(detector.activations(val_X_fb, trained_model))
         print(
@@ -397,11 +400,15 @@ if __name__ == "__main__":
             print("i_detector", i_detector)            
             if sanity_check:
                 # Accuracy should be 100% (non-adversarial training images):
-                print("train pos acc", percent(acc(train_a_pos[i_detector] >= 0.0)))
+                print("Detector train pos acc", percent(acc(train_a_pos[i_detector] >= 0.0)))
                 # Should be same as accuracy on foolbox images:
-                print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")
+                print_balanced_acc(
+                    val_a_pos[i_detector], val_a_neg[i_detector], "Detector validation"
+                )
             
-            print_balanced_acc(val_a_pos[i_detector], val_a_fb[i_detector], "Validation")
+            print_balanced_acc(
+                val_a_pos[i_detector], val_a_fb[i_detector], "Detector validation"
+            )
 
 """
 fgsm(eps=0.2)

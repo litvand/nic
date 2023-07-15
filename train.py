@@ -86,7 +86,7 @@ class Normalize(nn.Module):
         return self
 
     def forward(self, X, inplace=False):
-        if inplace:
+        if not inplace:
             X = X.clone()
         size = [1] * X.ndim
         size[1] = X.size(1)
@@ -160,7 +160,7 @@ class Whiten(nn.Module):
         return self
 
     def forward(self, X, inplace=False):
-        if inplace:
+        if not inplace:
             X = X.clone()
         X = X.flatten(1)
         X.sub_(self.mean)
