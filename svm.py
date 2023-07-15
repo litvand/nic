@@ -2,9 +2,8 @@ from copy import deepcopy
 
 import matplotlib.pyplot as plt
 import torch
-
-from sklearn.svm import SVC
-
+import sklearn
+# from sklearn.svm import SVC
 # from sklearn.linear_model import SGDOneClassSVM
 from torch import nn
 
@@ -28,7 +27,7 @@ class SVM(nn.Module):
     def forward(self, X):
         return self.linear(X).view(-1)
 
-    def fit(self, train_X_pos, train_X_neg, verbose=False, n_epochs=1000, margin=0.5, lr=0.1):
+    def fit(self, train_X_pos, train_X_neg=None, verbose=False, n_epochs=1000, margin=0.5, lr=0.1):
         optimizer = train.get_optimizer(torch.optim.NAdam, self.linear, weight_decay=0.0, lr=lr)
         min_loss = torch.inf
         min_state = None
@@ -53,7 +52,7 @@ class SVM(nn.Module):
         return self
 
     def fit_one_class(
-        self, train_X_pos, verbose=False, perfect_train=False, n_epochs=1000, margin=1.0
+        self, train_X_pos, verbose=False, true_positives=False, n_epochs=1000, margin=1.0
     ):
         """
         Trains SVM to give a positive output for all training inputs, while minimizing the total set
@@ -63,14 +62,14 @@ class SVM(nn.Module):
         1999. Replicates sklearn OneClassSVM given same parameters.
 
         train_X_pos: Positive training inputs; no labels since one class
-        perfect_train: Whether to postprocess bias so that the output is positive for all
-                       positive training inputs, i.e. prioritize true positives.
+        true_positives: Whether to postprocess bias so that the output is positive for all
+                        positive training inputs, i.e. prioritize true positives.
         batch_size: Number of training inputs per batch
         n_epochs: Number of passes through training data
         """
 
         # In range [0; 1]; lower nu --> higher importance of including positive examples
-        nu = 0.01 if perfect_train else 0.5
+        nu = 0.01 if true_positives else 0.5
         lr = 0.01
         assert lr * nu / 2 <= 1, (lr, nu)  # `lr * nu/2 > 1` breaks regularization.
 
@@ -97,7 +96,7 @@ class SVM(nn.Module):
             if min_state is not None:
                 self.linear.load_state_dict(min_state)
 
-            if perfect_train:
+            if true_positives:
                 # Adjust bias by choosing minimum output that avoids false negatives.
                 min_output_should_be = 1e-8
                 self.linear.bias += min_output_should_be - self.linear(train_X_pos).min()

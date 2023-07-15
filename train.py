@@ -40,22 +40,23 @@ def load(model, filename):
 
 
 class Normalize(nn.Module):
-    def __init__(self, example_x):
+    def __init__(self, example_x, channelwise=True):
         super().__init__()
-        n_channels = len(example_x)
+        n_channels = len(example_x) if channelwise else 1
         d = example_x.device
+        print("normalize n_channels", n_channels)
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
         self.scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
         self.n_warm = 0
 
-    def mean_var(self, train_X, channelwise):
+    def mean_var(self, train_X):
         n_new = len(train_X)
         if n_new < 2:
             return
 
-        if channelwise:
+        if len(self.shift) > 1:
             # Average over each channel -- channel dimension first
-            train_X = train_X.transpose(0, 1).view(train_X.size(1), -1)
+            train_X = train_X.transpose(0, 1).view(len(self.shift), -1)
         else:
             # Average over all data -- single fake channel
             train_X = train_X.view(1, -1)
@@ -77,18 +78,28 @@ class Normalize(nn.Module):
         assert (self.scale >= 0.0).all(), self.scale
         self.n_warm += n_new
 
-    def fit(self, train_X, channelwise=True, finish=True):
-        self.mean_var(train_X, channelwise)
+    def fit(self, train_X, finish=True):
+        print(
+            "normalize fit", train_X.size(), self.shift.size(), train_X.device, self.shift.device
+        )
+        self.mean_var(train_X)
         if finish:
             self.scale += 1e-10
             self.scale.rsqrt_()
             self.n_warm = 0
         return self
 
-    def forward(self, X):
+    def forward(self, X, inplace=False):
+        print(
+            "normalize forward", X.size(), self.shift.size(), X.device, self.shift.device
+        )
+        if inplace:
+            X = X.clone()
         size = [1] * X.ndim
-        size[1] = len(self.shift)
-        return (X - self.shift.view(size)) * self.scale.view(size)
+        size[1] = X.size(1)
+        X.sub_(self.shift.expand(size[1]).view(size))
+        X.mul_(self.scale.expand(size[1]).view(size))
+        return X
 
 
 class Whiten(nn.Module):
@@ -156,8 +167,13 @@ class Whiten(nn.Module):
 
         return self
 
-    def forward(self, X):
-        return torch.mm(X.flatten(1) - self.mean, self.w.T)
+    def forward(self, X, inplace=False):
+        if inplace:
+            X = X.clone()
+        X = X.flatten(1)
+        X.sub_(self.mean)
+        torch.mm(X, self.w.T, out=X)
+        return X
 
 
 _get_optimizer_warned = set()
