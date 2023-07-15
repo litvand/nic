@@ -5,7 +5,7 @@ from copy import deepcopy
 import git
 import torch
 import torch.nn.functional as F
-from torch import nn, linalg
+from torch import linalg, nn
 
 from eval import acc, percent, print_multi_acc
 from lsuv import LSUV_
@@ -39,59 +39,60 @@ def load(model, filename):
     model.load_state_dict(state_dict)
 
 
-def activations_at(sequential, X, module_indices):
-    """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
-
-    sequential = list(sequential.children())
-    activations = []
-    for i_module, module in enumerate(sequential):
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        X = module(X)
-        # Support negative indices
-        if i_module in module_indices or i_module - len(sequential) in module_indices:
-            activations.append(X)
-
-    assert len(activations) == len(module_indices), (
-        activations,
-        sequential,
-        module_indices,
-    )
-    return activations
-
-
 class Normalize(nn.Module):
-    def __init__(self, example_x):
+    def __init__(self, example_x, channelwise=True):
         super().__init__()
-        n_channels = len(example_x)
+        n_channels = len(example_x) if channelwise else 1
         d = example_x.device
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
-        self.inv_scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
+        self.scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
+        self.n_warm = 0
 
-    def fit(self, train_X, unit_range=False, scalar=False):
-        if scalar:
+    def mean_var(self, train_X):
+        n_new = len(train_X)
+        if n_new < 2:
+            return
+
+        if len(self.shift) > 1:
+            # Average over each channel -- channel dimension first
+            train_X = train_X.transpose(0, 1).view(len(self.shift), -1)
+        else:
             # Average over all data -- single fake channel
             train_X = train_X.view(1, -1)
-        else:
-            # Average over each channel -- channel dimension first
-            train_X = train_X.transpose(0, 1).flatten(1)
 
-        if unit_range:
-            # Each channel in the range [0, 1] (in training data)
-            self.shift.copy_(train_X.min(1)[0])  # Min of each channel (in training data)
-            self.inv_scale.copy_(1.0 / (train_X.max(1)[0] - self.shift))
+        if self.n_warm == 0:
+            torch.mean(train_X, 1, out=self.shift)
         else:
-            # Each channel normally distributed
-            self.shift.copy_(train_X.mean(1))  # Mean of each channel
-            self.inv_scale.copy_(1.0 / train_X.std(1))
+            self.shift.mul_(self.n_warm / (self.n_warm + n_new))
+            self.shift.add_(train_X.sum(1), alpha=1.0 / (self.n_warm + n_new))
 
+        var_sum = (train_X - self.shift.view(-1, 1)).pow(2).sum(-1)
+        assert (var_sum >= 0.0).all(), var_sum
+        if self.n_warm == 0:
+            torch.mul(var_sum, 1.0 / (n_new - 1), out=self.scale)
+        else:
+            self.scale.mul_((self.n_warm - 1) / (self.n_warm + n_new - 1))
+            self.scale.add_(var_sum, alpha=1.0 / (self.n_warm + n_new - 1))
+
+        assert (self.scale >= 0.0).all(), self.scale
+        self.n_warm += n_new
+
+    def fit(self, train_X, finish=True):
+        self.mean_var(train_X)
+        if finish:
+            self.scale += 1e-10
+            self.scale.rsqrt_()
+            self.n_warm = 0
         return self
 
-    def forward(self, X):
+    def forward(self, X, inplace=False):
+        if inplace:
+            X = X.clone()
         size = [1] * X.ndim
-        size[1] = len(self.shift)
-        return (X - self.shift.expand(size)) * self.inv_scale.expand(size)
+        size[1] = X.size(1)
+        X.sub_(self.shift.expand(size[1]).view(size))
+        X.mul_(self.scale.expand(size[1]).view(size))
+        return X
 
 
 class Whiten(nn.Module):
@@ -101,28 +102,70 @@ class Whiten(nn.Module):
         d = example_x.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
         self.w = nn.Parameter(torch.eye(n_features, device=d), requires_grad=False)
+        self.n_warm = 0
 
-    def fit(self, train_X, zca=True):
+    def mean_cov(self, train_X):
         """
+        Update mean and covariance without actually calculating whitening matrix.
+
         NOTE: If train_X contains images, this calculates separate means for each pixel location.
 
-        train_X: Training inputs
-        zca: True --> ZCA, False --> PCA
+        "Formulas for Robust, One-Pass Parallel Computation of Covariances and Arbitrary-Order
+        Statistical Moments", Philippe Pebay, 2008
         """
 
-        train_X = train_X.flatten(1)
-        self.mean.copy_(train_X.mean(0))
+        if len(train_X) < 2:
+            return
 
-        cov = torch.cov((train_X - self.mean).T)
-        eig_vals, eig_vecs = linalg.eigh(cov)
-        torch.mm(eig_vals.clamp(min=1e-6).rsqrt_().diag(), eig_vecs.T, out=self.w)
+        train_X = train_X.flatten(1)
+        n_new = len(train_X)
+        n_total = self.n_warm + n_new
+
+        if self.n_warm == 0:
+            self.mean.copy_(train_X.mean(0))  # Mean of each feature
+        else:
+            self.mean.mul_(self.n_warm / n_total)
+            self.mean.add_(train_X.mean(0), alpha=n_new / n_total)
+
+        # TODO: `self.mean` or just `train_X.mean` in batch covariance calculation?
+        train_X = train_X - self.mean
+        # Reuse `self.w` memory since it will be overwritten anyway after changing cov.
+        # cov = torch.cov(train_X, correction=1)
+        cov = torch.mm(train_X.T, train_X)
+
+        if self.n_warm == 0:
+            cov.mul_(1.0 / (n_total - 1))
+            self.w.data = cov
+        else:
+            self.w.mul_((self.n_warm - 1) / (n_total - 1))
+            self.w.add_(cov, alpha=1.0 / (n_total - 1))
+
+        self.n_warm = n_total
+
+    def fit(self, train_X, zca=True, finish=True):
+        """Calculate the whitening matrix based on data given so far."""
+
+        self.mean_cov(train_X)
+        if not finish:
+            return self
+
+        self.n_warm = 0
+        # `self.w` contains the covariance matrix
+        eig_vals, eig_vecs = linalg.eigh(self.w)
+        eig_vals.clamp_(min=1e-10).rsqrt_()
+        torch.mul(eig_vals.view(-1, 1).expand_as(eig_vecs), eig_vecs.T, out=self.w)
         if zca:
-            self.w.copy_(eig_vecs.mm(self.w))
+            torch.mm(eig_vecs, self.w, out=self.w)
 
         return self
 
-    def forward(self, X):
-        return torch.mm(X.flatten(1) - self.mean, self.w.T)
+    def forward(self, X, inplace=False):
+        if inplace:
+            X = X.clone()
+        X = X.flatten(1)
+        X.sub_(self.mean)
+        torch.mm(X, self.w.T, out=X)
+        return X
 
 
 _get_optimizer_warned = set()
@@ -182,7 +225,7 @@ def gradient_noise(model, i_x, initial_variance=0.01):
 
 
 def logistic_regression(
-    net, data, init=False, verbose=False, lr=1e-3, batch_size=128, n_epochs=100, grad_var=0.0
+    net, data, init=False, verbose=False, lr=1e-3, batch_size=128, n_epochs=100, grad_noise=0.0
 ):
     """
     net: Should output logits for each class (can be single logit for binary classification)
@@ -222,26 +265,25 @@ def logistic_regression(
 
     for epoch in range(n_epochs):
         perm = torch.randperm(len(train_X))
-        train_X, train_y = train_X[perm], train_y[perm]
 
         if init and epoch == 0:
             # GPU memory must be large enough to evaluate all validation X without gradients,
             # so we can reuse that as an upper bound on the number of X to give to LSUV.
             n = len(val_X) if val_X is not None else batch_size
-            LSUV_(net, train_X[:n])
+            LSUV_(net, train_X[perm[:n]])
 
         loss, epoch_loss = None, 0.0
         for i_x in range(0, len(train_X), batch_size):
-            batch_X = train_X[i_x : i_x + batch_size]
+            batch_X = train_X[perm[i_x : i_x + batch_size]]
             batch_outputs = net_fn(batch_X)
-            batch_y = train_y[i_x : i_x + batch_size]
+            batch_y = train_y[perm[i_x : i_x + batch_size]]
 
             loss = loss_fn(batch_outputs, batch_y)
             epoch_loss += loss.item()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            if grad_var > 0.0:
-                gradient_noise(net, epoch * len(train_X) + i_x, grad_var)
+            if grad_noise > 0.0:
+                gradient_noise(net, epoch * len(train_X) + i_x, grad_noise)
             optimizer.step()
 
         n_batches = len(train_X) // batch_size + (len(train_X) % batch_size > 0)
@@ -284,3 +326,29 @@ def logistic_regression(
             net.train()
     net.load_state_dict(min_state)
     net.eval()
+
+
+import gc
+import time
+
+if __name__ == "__main__":
+    print(torch.cuda.memory_allocated() / 1e6, "X")
+    X = torch.rand((100, 1000), dtype=torch.float32, device="cuda")
+    print("X size", X.size())
+
+    print(torch.cuda.memory_allocated() / 1e6, "mean")
+    X.sub_(X.mean(0))
+
+    print(torch.cuda.memory_allocated() / 1e6, "cov")
+    cov = torch.mm(X.T, X)
+    cov.mul_(1.0 / (len(X) - 1))
+    print("cov size", cov.size())
+
+    print(torch.cuda.memory_allocated() / 1e6, "eig")
+    X = None
+    t0 = time.time()
+    for _ in range(50):
+        eigvals, eigvecs = torch.linalg.eigh(cov)
+    print("time", time.time() - t0)
+
+    print(torch.cuda.memory_allocated() / 1e6, "exit")

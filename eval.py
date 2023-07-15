@@ -1,5 +1,66 @@
+import gc
+
 import matplotlib.pyplot as plt
 import torch
+
+
+def batched_forward(net, X, batch_size):
+    outputs = []
+    for i_x in range(0, len(X), batch_size):
+        gc.collect()
+        outputs.append(net(X[i_x : i_x + batch_size]).cpu())
+
+    return torch.cat(outputs)
+
+
+def batched_activations(net, X, batch_size):
+    n_x = len(X)
+    batches = [net.activations(X[i_x : i_x + batch_size]) for i_x in range(0, n_x, batch_size)]
+    X = None
+
+    while True:
+        layer = None
+        try:
+            for i_batch, batch in enumerate(batches):
+                gc.collect()
+                activation = next(batch)
+
+                # Concatenate batches in place
+                if i_batch == 0:
+                    if len(batches) > 1:
+                        assert len(activation) == batch_size, (len(activation), batch_size, n_x)
+
+                    layer = torch.empty(
+                        (n_x, *activation.size()[1:]),
+                        dtype=activation.dtype,
+                        device=activation.device,
+                    )
+
+                i_x = i_batch * batch_size
+                i_next = min(i_x + batch_size, n_x)
+                layer[i_x:i_next] = activation
+
+        except StopIteration:
+            # No batches left
+            break
+
+        yield layer
+
+
+def activations_at(sequential, X, module_indices):
+    """Get activations from modules inside an `nn.Sequential` at indices in `module_indices`."""
+
+    n_yielded = 0
+    for i_module, module in enumerate(sequential):
+        gc.collect()
+
+        X = module(X)
+        # Support negative indices
+        if i_module in module_indices or i_module - len(sequential) in module_indices:
+            yield X
+            n_yielded += 1
+
+    assert n_yielded == len(module_indices), (n_yielded, len(module_indices))
 
 
 def plot_distr_overlap(a, b, a_name="", b_name=""):

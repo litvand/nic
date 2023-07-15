@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from train import Whiten
+from train import Normalize
 
 
 def preprocess(n_train, X, y):
@@ -19,7 +19,7 @@ def preprocess(n_train, X, y):
 
     train_X_neg, val_X_neg = train_X_neg[: len(train_X_pos)], val_X_neg[: len(val_X_pos)]
 
-    whiten = Whiten(train_X_pos[0]).fit(train_X_pos, zca=True)
+    whiten = Normalize(train_X_pos[0]).fit(train_X_pos)
     return tuple(
         None if len(X) == 0 else whiten(X) for X in (train_X_pos, train_X_neg, val_X_pos, val_X_neg)
     )

@@ -1,3 +1,4 @@
+import gc
 import math
 import time
 from copy import deepcopy
@@ -7,16 +8,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pykeops.torch as ke
 import torch
-from pycave.bayes import GaussianMixture
+
+# from pycave.bayes import GaussianMixture
 from torch import linalg, nn
-from torch.nn.functional import softmax
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.nn.functional import softmax
 
 import data2d
 import train
 from cluster import cluster_var_pr_, kmeans_
 from eval import acc, percent, round_tensor
-
 
 """
 DetectorMixture is too slow with a large amount of data and isn't significantly more accurate than
@@ -349,7 +350,7 @@ class DetectorKe(nn.Module):
 class DetectorMixture(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
-        self.mixture = GaussianMixture(**kwargs)
+        self.mixture = None  # GaussianMixture(**kwargs)
         self.threshold = nn.Parameter(torch.tensor(torch.nan), requires_grad=False)
         self.centers = None
 
@@ -469,6 +470,11 @@ class DetectorKmeans(nn.Module):
         Retries only if validation data is available.
         """
 
+        train_X_pos = train_X_pos.contiguous()
+        train_X_neg = train_X_neg.contiguous() if train_X_neg is not None else train_X_neg
+        val_X_pos = val_X_pos.contiguous() if val_X_pos is not None else val_X_pos
+        val_X_neg = val_X_neg.contiguous() if val_X_neg is not None else val_X_neg
+
         params = None
         best_acc = 0.0
         best_densities = None
@@ -483,8 +489,8 @@ class DetectorKmeans(nn.Module):
                     print(len(train_X_pos), "ERROR: nans", len(nans), nans)
                     print(
                         "[self.vars], [self.prs]",
-                        f"[{round_tensor(self.vars.min())}-{round_tensor(self.vars.max())}]",
-                        f"[{round_tensor(self.prs.min())}-{round_tensor(self.prs.max())}]",
+                        f"[{round_tensor(self.vars.min())} .. {round_tensor(self.vars.max())}]",
+                        f"[{round_tensor(self.prs.min())} .. {round_tensor(self.prs.max())}]",
                     )
                     continue
 
@@ -501,15 +507,16 @@ class DetectorKmeans(nn.Module):
                 else:
                     self.threshold.copy_(train_densities.min())
 
-                if n_retries > 1 and val_X_pos is not None and val_X_neg is not None:
-                    pos_acc = acc(self.density(val_X_pos) > self.threshold)
-                    neg_acc = acc(self.density(val_X_neg) <= self.threshold)
-                    val_acc = 0.5 * (pos_acc + neg_acc)
-                    if val_acc > best_acc:
-                        params = all_params(self)
-                        best_acc = val_acc
-                        best_densities = train_densities
-                else:
+                best_densities = train_densities if best_densities is None else best_densities
+                if n_retries < 2 or val_X_pos is None or val_X_neg is None:
+                    break
+
+                pos_acc = acc(self.density(val_X_pos) > self.threshold)
+                neg_acc = acc(self.density(val_X_neg) <= self.threshold)
+                val_acc = 0.5 * (pos_acc + neg_acc)
+                if val_acc > best_acc:
+                    params = all_params(self)
+                    best_acc = val_acc
                     best_densities = train_densities
 
         set_params(self, params)
@@ -520,10 +527,10 @@ class DetectorKmeans(nn.Module):
 
 if __name__ == "__main__":
     device = "cpu"
-    fns = [data2d.overlap]
+    fns = [data2d.line]
     # fns = [data2d.hollow, data2d.circles, data2d.triangle, data2d.line]
 
-    n_runs = 8
+    n_runs = 2
     accs_on_pos, accs_on_neg = torch.zeros(n_runs), torch.zeros(n_runs)
     for run in range(n_runs):
         print(f"-------------------------------- Run {run} --------------------------------")
@@ -556,9 +563,7 @@ if __name__ == "__main__":
         #     equal_clusters=True,
         #     full_cov=False
         # ).fit(train_X_pos, n_epochs=200, sparsity=0, plot=False)
-        detector = DetectorKmeans(train_X_pos[0], n_centers).fit(
-            train_X_pos, train_X_neg, val_X_pos, val_X_neg
-        )
+        detector = DetectorKmeans(train_X_pos[0], n_centers).fit(train_X_pos)
         print("fit time:", time.time() - start)
 
         outputs_pos, outputs_neg = detector(val_X_pos), detector(val_X_neg)

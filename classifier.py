@@ -1,14 +1,17 @@
+import gc
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+import eval
 import mnist
 import train
 
 N_CLASSES = 10
 
 
-class CleverHans1(nn.Module):
+class CleverHansA(nn.Module):
     """Basic CNN architecture."""
 
     def __init__(self, in_channels=1):
@@ -26,13 +29,62 @@ class CleverHans1(nn.Module):
         self.fc2 = nn.Linear(128, 10)  # (batch_size, 128) --> (batch_size, 10)
 
     def forward(self, x):
+        a = self.activations(x)
+        for x in a:
+            pass
+        return x
+
+    def activations(self, x):
         x = F.relu(self.conv1(x))
+        yield x
         x = F.relu(self.conv2(x))
+        yield x
         x = F.relu(self.conv3(x))
+        yield x
         x = x.view(-1, 128 * 4 * 4)
         x = self.fc1(x)
-        x = self.fc2(x)
+        x = self.fc2(x)  # sic
+        yield x
+
+
+class CleverHansB(nn.Module):
+    """CNN architecture. This is the same MNIST model from pytorch/examples/mnist repository"""
+
+    def __init__(self, in_channels=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, 3, 1)
+        self.conv2 = nn.Conv2d(32, 64, 3, 1)
+        self.dropout1 = nn.Dropout(0.25)
+        self.dropout2 = nn.Dropout(0.5)
+        self.fc1 = nn.Linear(9216, 128)
+        self.fc2 = nn.Linear(128, 10)
+
+    def forward(self, x):
+        a = self.activations(x)
+        for x in a:
+            pass
         return x
+
+    def activations(self, x):
+        x = self.conv1(x)
+        x = F.relu(x)
+        yield x
+
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        yield x
+
+        x = self.dropout1(x)
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        yield x
+
+        x = self.dropout2(x)
+        x = self.fc2(x)
+        x = F.log_softmax(x, dim=1)
+        yield x
 
 
 class FullyConnected(nn.Module):
@@ -51,7 +103,7 @@ class FullyConnected(nn.Module):
         return self.seq(img_batch)
 
     def activations(self, img_batch):
-        return train.activations_at(self.seq, img_batch, [3, -1])
+        return eval.activations_at(self.seq, img_batch, [3, -1])
 
 
 class PoolNet(nn.Module):
@@ -90,19 +142,22 @@ class PoolNet(nn.Module):
         return self.fully_connected(self.convs(img_batch))
 
     def activations(self, img_batch):
-        """Returns activations of hidden layers before the output"""
-        activations = train.activations_at(self.convs, img_batch, [3, -1])
-        activations.extend(train.activations_at(self.fully_connected, activations[-1], [2, -1]))
-        return activations
+        """Yields activations of hidden layers before the output"""
+
+        for a0 in eval.activations_at(self.convs, img_batch, [3, -1]):
+            yield a0
+
+        for a in eval.activations_at(self.fully_connected, a0, [2, -1]):
+            yield a
 
 
 if __name__ == "__main__":
     torch.manual_seed(98765)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     data = mnist.load_data(n_train=20000, n_val=2000, device=device)
-    net = CleverHans1().to(device)
+    net = CleverHansB().to(device)
     train.logistic_regression(net, data, init=True, verbose=True, lr=1e-3)
-    train.save(net, "ch20k")
+    train.save(net, "ChB20k")
 
     import eval
 
@@ -131,7 +186,7 @@ NOTE: No automated commit, because on main branch
 val accuracy: 99.15%
 
 
-CleverHans1:
+CleverHansA:
 --- Epoch 27 (20k samples per epoch)
 Epoch average training loss: 3.359099546750762e-05
 Last batch accuracy: 100.0%

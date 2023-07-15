@@ -1,21 +1,25 @@
+import sklearn
 import torch
-from torch import nn
-from sklearn.kernel_approximation import Nystroem
-from sklearn.linear_model import SGDOneClassSVM
+from torch import cuda, nn
 
 import adversary
 import classifier
 import mnist
 import train
-from eval import acc, percent, print_balanced_acc
+from cache import TensorCache
+from eval import acc, batched_activations, percent, print_balanced_acc, print_multi_acc
 from mixture import DetectorKmeans
-from train import logistic_regression, Normalize, Whiten
+from train import Normalize, logistic_regression
 
 
 class SkSVM:
     def __init__(self, n_centers=None):
-        self.nystroem = None if n_centers is None else Nystroem(n_components=n_centers)
-        self.svm = SGDOneClassSVM()
+        self.nystroem = (
+            None
+            if n_centers is None
+            else sklearn.kernel_approximation.Nystroem(n_components=n_centers)
+        )
+        self.svm = sklearn.linear_model.SGDOneClassSVM()
 
     def fit_predict(self, X):
         dtype, device = X.dtype, X.device
@@ -30,6 +34,61 @@ class SkSVM:
         if self.nystroem is not None:
             X = self.nystroem.transform(X)
         return torch.tensor(self.svm.predict(X), dtype=dtype, device=device)
+
+
+def batched_whiten_fit(whiten, X, batch_size):
+    for i_x in range(0, len(X), batch_size):
+        i_next = i_x + batch_size
+        whiten.fit(X[i_x:i_next], finish=i_next >= len(X))
+    return whiten
+
+
+def cache_layers(whiten, X, trained_model, fit=False):
+    batch_size = 10000
+    cache = TensorCache(dir="./tmp")
+    X_flat = X.flatten(1)
+    if fit:
+        batched_whiten_fit(whiten[0], X_flat, batch_size)
+    cache.append(whiten[0](X_flat))
+
+    # Assumes each layer can fit in memory.
+    for i_a, a in enumerate(batched_activations(trained_model, X, batch_size)):
+        i_layer = i_a + 1
+        a = a.flatten(1).to(X.device)
+        if fit:
+            batched_whiten_fit(whiten[i_layer], a, batch_size)
+
+        n_nan = a.sum(1).isnan().count_nonzero().item()
+        if n_nan > 0:
+            print(f"ERROR: layer {i_layer} before whiten, n_nan {n_nan}, numel {a.numel()}")
+        whiten[i_layer](a, inplace=True)
+
+        n_nan = a.sum(1).isnan().count_nonzero().item()
+        if n_nan > 0:
+            print(f"ERROR: layer {i_layer} after whiten, n_nan {n_nan}, numel {a.numel()}")
+        cache.append(a)
+
+    return cache
+
+
+def maybe_load(module, filename):
+    return module if module is not None else torch.load("./tmp/" + filename)
+
+
+def fit_detectors(detectors, layers, layers_neg, _detector_type, filename):
+    was_none = detectors is None
+    detectors = maybe_load(detectors, filename)
+
+    densities, densities_neg = [], []
+    for i_layer, (detector, layer) in enumerate(zip(detectors, layers)):
+        print(f"- Layer {i_layer} -")
+        densities.append(detector.fit_predict(layer.contiguous().cuda()))
+        if layers_neg is not None:
+            densities_neg.append(detector(layers_neg[i_layer].contiguous().cuda()))
+
+    if was_none:
+        torch.save(detectors, "./tmp/" + filename)
+    return densities, densities_neg
 
 
 def cat_layer_pairs(layers):
@@ -51,14 +110,9 @@ def cat_layer_pairs(layers):
     for i_layer in range(len(layers) - 1):
         i_cur = i_next_features[i_layer] - n_features[i_layer]
         i_next_next = i_next_features[i_layer + 1]
-        pairs.append(cat_all[:, i_cur:i_next_next].contiguous())
+        pairs.append(cat_all[:, i_cur:i_next_next])
 
     return pairs
-
-
-def whitened_layers(whiten, X, trained_model):
-    layers = [X] + trained_model.activations(X)
-    return [w(l.flatten(1)) for w, l in zip(whiten, layers)]
 
 
 def cat_features(features):
@@ -66,15 +120,6 @@ def cat_features(features):
     List of n_features tensors with shape (n_points) --> tensor with shape (n_points, n_features)
     """
     return torch.cat([f.unsqueeze(1) for f in features], dim=1)
-
-
-def fit_detectors(detectors, layers, layers_neg, _detector_type):
-    densities, densities_neg = [], []
-    for detector, layer, layer_neg in zip(detectors, layers, layers_neg):
-        densities.append(detector.fit_predict(layer))
-        densities_neg.append(detector(layer_neg))
-
-    return densities, densities_neg
 
 
 class NIC(nn.Module):
@@ -89,10 +134,10 @@ class NIC(nn.Module):
     """
 
     detector_types = ["kmeans", "svm"]
-    final_types = ["vote", "logistic", "svm"]
+    final_types = ["min", "vote", "logistic", "svm"]
 
     def __init__(
-        self, example_x, trained_model, n_centers, detector_type="kmeans", final_type="vote"
+        self, example_x, trained_model, n_centers, detector_type="kmeans", final_type="min"
     ):
         super().__init__()
         X = example_x.unsqueeze(0)
@@ -103,9 +148,15 @@ class NIC(nn.Module):
         assert detector_type in NIC.detector_types, (detector_type, NIC.detector_types)
 
         with torch.no_grad():
-            layers = [X] + trained_model.activations(X)
+            layers = [X] + list(trained_model.activations(X))
             layers = [l.flatten(1) for l in layers]
-            self.whiten = nn.ModuleList([Whiten(l[0]) for l in layers])
+            self.whiten = nn.ModuleList(
+                [
+                    # (Whiten if l.size(1) < 1000 else Normalize)(l[0]) for l in layers
+                    Normalize(l[0])
+                    for l in layers
+                ]
+            )
 
             k = detector_type == "kmeans"
             self.value_detectors = [] if detector_type == "svm" else nn.ModuleList()
@@ -123,18 +174,20 @@ class NIC(nn.Module):
                 [nn.Linear(l.size(1), n_classes).to(X.device) for l in layers[:-2]]
             )
 
-            pair = torch.cat((logits, logits))
+            pair_example = torch.cat((logits, logits))
             self.prov_detectors = [] if detector_type == "svm" else nn.ModuleList()
-            for _ in self.classifiers:
+            for _ in layers[:-2]:
                 self.prov_detectors.append(
-                    DetectorKmeans(pair, n_centers) if k else SkSVM(n_centers)
+                    DetectorKmeans(pair_example, n_centers) if k else SkSVM(n_centers)
                 )
 
             densities = torch.zeros(1, dtype=X.dtype, device=X.device).expand(
-                len(self.value_detectors) + len(self.prov_detectors)
+                len(layers) + len(layers[:-2])
             )
-            self.final_normalize = Normalize(densities)
-            if final_type in ["vote", "logistic"]:
+            self.final_normalize = Normalize(densities, channelwise=False)
+            if final_type == "min":
+                self.final_detector = None
+            elif final_type in ["vote", "logistic"]:
                 self.final_detector = nn.Linear(len(densities), 1).to(X.device)
             elif final_type == "svm":
                 self.final_detector = SkSVM(None)
@@ -144,66 +197,103 @@ class NIC(nn.Module):
     def activations(self, X, trained_model):
         trained_model.eval()
 
-        layers = whitened_layers(self.whiten, X, trained_model)
-        value_densities = [v(l) for v, l in zip(self.value_detectors, layers)]
-        logits = [c(l) for c, l in zip(self.classifiers, layers[:-2])] + [layers[-1]]
-        prov_densities = [p(l) for p, l in zip(self.prov_detectors, cat_layer_pairs(logits))]
+        print("NIC.activations whiten")
+        whiten = maybe_load(self.whiten, "w")
+        layers = cache_layers(whiten, X, trained_model)
+        whiten = None
+
+        print("NIC.activations value detectors")
+        value_detectors = maybe_load(self.value_detectors, "vd")
+        value_densities = [v(l.to(X.device)) for v, l in zip(value_detectors, layers)]
+        value_detectors = None
+
+        classifiers = maybe_load(self.classifiers, "c")
+        logits = [classifiers[i](layers[i].to(X.device)) for i in range(len(classifiers))] + [
+            layers[-1].to(X.device)
+        ]
+        classifiers = None
+        logits = cat_layer_pairs(logits)
+
+        print("NIC.activations provenance detectors")
+        prov_detectors = maybe_load(self.prov_detectors, "pd")
+        prov_densities = [p(l.contiguous()) for p, l in zip(prov_detectors, logits)]
+        prov_detectors = None
 
         densities = value_densities + prov_densities
+        d = self.final_normalize(cat_features(densities))
         densities.append(
-            self.final_detector(self.final_normalize(cat_features(densities))).view(-1)
+            d.min(-1)[0] if self.final_type == "min" else self.final_detector(d).view(-1)
         )
-        return densities
+        return iter(densities)
 
     def forward(self, X, trained_model):
-        return self.activations(X, trained_model)[-1]
+        return tuple(self.activations(X, trained_model))[-1]
 
-    def fit(self, train_X_pos, train_X_neg, train_y, trained_model):
+    def fit(self, train_X_pos, train_y, trained_model, train_X_neg=None):
         """
         Train detector to classify images as adversarial or non-adversarial
 
         train_X_pos: Non-adversarial images
-        train_X_neg: Adversarial images
+        train_X_neg: Adversarial images; can be `None` depending on final_type
+                     (Learning is unsupervised aside from optionally the final detector.)
         train_y: Class indices of images in train_X_pos
         trained_model: Model already trained to classify images in train_X_pos
         """
+        print("--- NIC.fit ---")
         trained_model.eval()
 
         with torch.no_grad():
-            layers = [train_X_pos] + trained_model.activations(train_X_pos)
-            layers = [l.flatten(1) for l in layers]
-            for whiten, layer in zip(self.whiten, layers):
-                whiten.fit(layer)
-            layers = [whiten(layer) for whiten, layer in zip(self.whiten, layers)]
+            whiten = maybe_load(self.whiten, "w")
+            layers = cache_layers(whiten, train_X_pos, trained_model, fit=True)
 
-            layers_neg = whitened_layers(self.whiten, train_X_neg, trained_model)
+            print(f"whiten neg: {round(cuda.memory_allocated() / 1e9, 2)} GB")
+            layers_neg = (
+                None
+                if self.final_type == "min"
+                else cache_layers(whiten, train_X_neg, trained_model)
+            )
+
+            if self.whiten is None:
+                torch.save(whiten, "./tmp/w")
+            whiten = None
 
         print("--- Value detectors ---")
         value_densities, value_densities_neg = fit_detectors(
-            self.value_detectors, layers, layers_neg, self.detector_type
+            self.value_detectors, layers, layers_neg, self.detector_type, "vd"
         )
 
         print("--- NIC classifiers ---")
         logits, logits_neg = [], []
-        for classifier, layer, layer_neg in zip(self.classifiers, layers, layers_neg):
-            data = ((layer, train_y), (None, None))
-            logistic_regression(classifier, data, init=True, n_epochs=100)
-            logits.append(classifier(layer))
-            logits_neg.append(classifier(layer_neg))
+        classifiers = maybe_load(self.classifiers, "c")
+        for i_layer, c in enumerate(classifiers):
+            data = ((layers[i_layer].to(train_y.device), train_y), (None, None))
+            logistic_regression(c, data, init=True, batch_size=256, n_epochs=100, lr=1e-2)
+            logits.append(c(data[0][0]))
+            if layers_neg is not None:
+                logits_neg.append(c(layers_neg[i_layer].to(train_y.device)))
+        if self.classifiers is None:
+            torch.save(classifiers, "./tmp/c")
+        classifiers = None
 
-        logits.append(layers[-1])
-        logits_neg.append(layers_neg[-1])
-        pairs, pairs_neg = cat_layer_pairs(logits), cat_layer_pairs(logits_neg)
+        logits.append(layers[len(layers) - 1].to(train_y.device))
+        pairs = cat_layer_pairs(logits)
+        if layers_neg is not None:
+            logits_neg.append(layers_neg[len(layers) - 1].to(train_y.device))
+            pairs_neg = cat_layer_pairs(logits_neg)
+        else:
+            pairs_neg = None
 
         print("--- Provenance detectors ---")
         prov_densities, prov_densities_neg = fit_detectors(
-            self.prov_detectors, pairs, pairs_neg, self.detector_type
+            self.prov_detectors, pairs, pairs_neg, self.detector_type, "pd"
         )
 
         print("--- NIC final ---")
+        if self.final_type == "min":
+            return self
+
         densities = value_densities + prov_densities
         densities_neg = value_densities_neg + prov_densities_neg
-
         if self.final_type == "vote":
             with torch.no_grad():
                 # Accuracy on positive training examples is always 100%, so only calculate accuracy
@@ -218,7 +308,7 @@ class NIC(nn.Module):
 
         with torch.no_grad():
             densities = cat_features(densities)
-            self.final_normalize.fit(densities, scalar=True)
+            self.final_normalize.fit(densities)
             densities = self.final_normalize(densities)
 
             densities_neg = self.final_normalize(cat_features(densities_neg))
@@ -236,7 +326,9 @@ class NIC(nn.Module):
                 self.final_detector.weight.fill_(1.0 / densities.size(1))
                 self.final_detector.bias.copy_(0.5 * densities.size(1))
 
-            logistic_regression(self.final_detector, regression_data, n_epochs=100)
+            logistic_regression(
+                self.final_detector, regression_data, batch_size=5096, n_epochs=100, lr=0.1
+            )
             return self
 
         self.final_detector.fit_predict(densities)
@@ -245,45 +337,48 @@ class NIC(nn.Module):
 
 if __name__ == "__main__":
     torch.manual_seed(98765)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if cuda.is_available() else "cpu"
 
     print("--- Data ---")
     (train_X_pos, train_y), (val_X_pos, val_y) = mnist.load_data(
-        n_train=20000, n_val=10000, device=device
+        n_train=20000, n_val=2000, device=device
     )
 
     print("--- Model ---")
-    trained_model = classifier.PoolNet(train_X_pos[0])
-    train.load(trained_model, "pool-norestart20k-2223b6b48b3680297dda4cb0f644d39268753dca")
+    trained_model = classifier.CleverHansA()
+    train.load(trained_model, "ChA20k-0395d49193d8ccdf48b2d569f6ae8300612d4270")
     trained_model.to(device)
 
     print("--- Detector ---")
-    train_X_neg = train_X_pos.clone()
-    adversary.fgsm_(train_X_neg, train_y, trained_model, 0.2)
+
     n_centers = 1 + len(train_X_pos) // 100
-    detector = NIC(
-        train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="vote"
-    )
-    detector.fit(train_X_pos, train_X_neg, train_y, trained_model)
-    train.save(detector, f"nic{n_centers}-onnorestart20k")
-    # train.load(detector, "nic201-onnorestart20k-da96f8f2a03df650d902af73d7951b70371968ac")
+    detector = NIC(train_X_pos[0], trained_model, n_centers, detector_type="kmeans")
+
+    # detector.fit(train_X_pos, train_y, trained_model)
+    # train.save(detector, f"nic{n_centers}-onChA20k")
+    train.load(detector, f"nic201-onChA20k-b6eab93ff6bd26e3262b5f124c8630c31ad6cc6f")
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
-    adversary.fgsm_(val_X_neg, val_y, trained_model, 0.2)
+    adversary.fgsm_(val_X_neg, val_y, trained_model, 0.3)
+    print_multi_acc(trained_model(val_X_neg), val_y, "trained_model on val_X_neg")
 
     with torch.no_grad():
-        train_a_pos = detector.activations(train_X_pos, trained_model)
-        train_a_neg = detector.activations(train_X_neg, trained_model)
-        val_a_pos = detector.activations(val_X_pos, trained_model)
-        val_a_neg = detector.activations(val_X_neg, trained_model)
-        print("Index of first provenance detector:", len(detector.value_detectors))
+        train_a_pos = tuple(detector.activations(train_X_pos, trained_model))
+        val_a_pos = tuple(detector.activations(val_X_pos, trained_model))
+        val_a_neg = tuple(detector.activations(val_X_neg, trained_model))
+        print(
+            "Index of first provenance detector:",
+            (len(train_a_pos) + 1) // 2 if len(train_a_pos) > 3 else None,
+        )
         for i_detector in range(len(train_a_pos)):
             print("i_detector", i_detector)
-            print_balanced_acc(train_a_pos[i_detector], train_a_neg[i_detector], "Training")
+            print("train pos acc", percent(acc(train_a_pos[i_detector] >= 0.0)))
             print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")
 
 """
+fgsm(eps=0.2)
+
 Sklearn SVM (value detectors, provenance detectors and final detector) on PoolNet 20k/2k:
 --- Validation ---
 Index of first provenance detector: 5

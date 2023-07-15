@@ -5,9 +5,6 @@ from pykeops.torch import LazyTensor
 
 import data2d
 
-# With LazyTensor: 50 loops, best of 5: 5.53 msec per loop
-# Without LazyTensor: 10 loops, best of 5: 20.6 msec per loop
-
 
 def kmeans_farthest_(centers, train_X):
     """
@@ -67,9 +64,7 @@ def kmeans_lloyd_(centers, train_X, accuracy):
 
     assert 0 <= accuracy <= 1, accuracy
 
-    x_i = LazyTensor(train_X[:, None, :])
-    center_j = LazyTensor(centers[None, :, :])
-
+    x_i, center_j = LazyTensor(train_X[:, None, :]), LazyTensor(centers[None, :, :])
     avg_dist = torch.inf
     for iteration in range(1000):
         # E step: assign points to the closest cluster
@@ -104,6 +99,11 @@ def kmeans_(centers, train_X, accuracy=0.9999):
     train_X: Training points (n_points, n_features)
     """
 
+    if len(centers) >= len(train_X):
+        centers[: len(train_X)] = train_X[:]
+        centers[len(train_X) :] = train_X[0]
+        return
+
     i_centers = torch.randperm(len(train_X), device=train_X.device)[: len(centers)]
     torch.index_select(train_X, 0, i_centers, out=centers)
     kmeans_lloyd_(centers, train_X, accuracy)
@@ -133,16 +133,20 @@ def cluster_var_pr_(vars, prs, train_X, centers, min_var=1e-8):
     torch.div(j_center_from_i.bincount(minlength=len(centers)), float(len(train_X)), out=prs)
 
 
+# With LazyTensor: 50 loops, best of 5: 5.53 msec per loop
+# Without LazyTensor: 10 loops, best of 5: 20.6 msec per loop
+
+
 def bench():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train_X = data2d.hollow(5000, 1, device, 100)[0]
     print("train_X", len(train_X))
 
     def b():
-        # t = time.time()
-        centers = kmeans(train_X, 1 + len(train_X) // 100)
+        t = time.time()
+        centers = kmeans_(train_X, 1 + len(train_X) // 100)
         torch.cuda.synchronize()
-        # print(time.time() - t)
+        print(time.time() - t)
         return centers
 
     return b
