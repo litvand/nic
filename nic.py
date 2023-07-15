@@ -360,36 +360,47 @@ if __name__ == "__main__":
     train.load(detector, f"nic201-onChA20k-b6eab93ff6bd26e3262b5f124c8630c31ad6cc6f")
 
     print("--- Validation ---")
-    val_X_neg = val_X_pos.clone()
-    adversary.fgsm_(val_X_neg, val_y, trained_model, 0.3)
-    print_multi_acc(trained_model(val_X_neg), val_y, "trained_model on val_X_neg")
+    eps = 0.2
+    sanity_check = False
+    if sanity_check:
+        # Should be equivalent to foolbox FGSM:
+        val_X_neg = val_X_pos.clone()
+        adversary.fgsm_(val_X_neg, val_y, trained_model, eps)
+        print_multi_acc(trained_model(val_X_neg), val_y, "trained_model on val_X_neg")
 
     val_X_fb, _, success = fb.attacks.FGSM()(
         fb.PyTorchModel(trained_model, (-100.0, 100.0)),
         val_X_pos,
         fb.Misclassification(val_y),
-        epsilons=[0.3],
+        epsilons=[eps],
     )
     val_X_fb = val_X_fb[0]
     print(
         "trained_model acc on val_X_fb:",
         percent(1.0 - success[0].count_nonzero() / float(len(success[0])))
     )
-    print_multi_acc(trained_model(val_X_neg), val_y, "trained_model on val_X_fb")
+    if sanity_check:
+        # Should be same as `1 - success`:
+        print_multi_acc(trained_model(val_X_neg), val_y, "trained_model on val_X_fb")
 
     with torch.no_grad():
-        train_a_pos = tuple(detector.activations(train_X_pos, trained_model))
+        if sanity_check:
+            train_a_pos = tuple(detector.activations(train_X_pos, trained_model))
+            val_a_neg = tuple(detector.activations(val_X_neg, trained_model))
         val_a_pos = tuple(detector.activations(val_X_pos, trained_model))
-        val_a_neg = tuple(detector.activations(val_X_neg, trained_model))
         val_a_fb = tuple(detector.activations(val_X_fb, trained_model))
         print(
             "Index of first provenance detector:",
-            (len(train_a_pos) + 1) // 2 if len(train_a_pos) > 3 else None,
+            (len(val_a_pos) + 1) // 2 if len(val_a_pos) > 3 else None,
         )
-        for i_detector in range(len(train_a_pos)):
-            print("i_detector", i_detector)
-            print("train pos acc", percent(acc(train_a_pos[i_detector] >= 0.0)))
-            print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")
+        for i_detector in range(len(val_a_pos)):
+            print("i_detector", i_detector)            
+            if sanity_check:
+                # Accuracy should be 100% (non-adversarial training images):
+                print("train pos acc", percent(acc(train_a_pos[i_detector] >= 0.0)))
+                # Should be same as accuracy on foolbox images:
+                print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")
+            
             print_balanced_acc(val_a_pos[i_detector], val_a_fb[i_detector], "Validation")
 
 """
