@@ -5,7 +5,7 @@ from copy import deepcopy
 import git
 import torch
 import torch.nn.functional as F
-from torch import nn, linalg
+from torch import linalg, nn
 
 from eval import acc, percent, print_multi_acc
 from lsuv import LSUV_
@@ -44,7 +44,6 @@ class Normalize(nn.Module):
         super().__init__()
         n_channels = len(example_x) if channelwise else 1
         d = example_x.device
-        print("normalize n_channels", n_channels)
         self.shift = nn.Parameter(torch.zeros(n_channels, device=d), requires_grad=False)
         self.scale = nn.Parameter(torch.ones(n_channels, device=d), requires_grad=False)
         self.n_warm = 0
@@ -79,9 +78,6 @@ class Normalize(nn.Module):
         self.n_warm += n_new
 
     def fit(self, train_X, finish=True):
-        print(
-            "normalize fit", train_X.size(), self.shift.size(), train_X.device, self.shift.device
-        )
         self.mean_var(train_X)
         if finish:
             self.scale += 1e-10
@@ -90,9 +86,6 @@ class Normalize(nn.Module):
         return self
 
     def forward(self, X, inplace=False):
-        print(
-            "normalize forward", X.size(), self.shift.size(), X.device, self.shift.device
-        )
         if inplace:
             X = X.clone()
         size = [1] * X.ndim
@@ -106,7 +99,6 @@ class Whiten(nn.Module):
     def __init__(self, example_x):
         super().__init__()
         n_features = example_x.numel()
-        print("whiten n_features:", n_features)
         d = example_x.device
         self.mean = nn.Parameter(torch.zeros(n_features, device=d), requires_grad=False)
         self.w = nn.Parameter(torch.eye(n_features, device=d), requires_grad=False)
@@ -338,7 +330,6 @@ def logistic_regression(
 
 import gc
 import time
-
 
 if __name__ == "__main__":
     print(torch.cuda.memory_allocated() / 1e6, "X")

@@ -1,15 +1,16 @@
 from copy import deepcopy
 
 import matplotlib.pyplot as plt
-import torch
 import sklearn
+import torch
+
 # from sklearn.svm import SVC
 # from sklearn.linear_model import SGDOneClassSVM
 from torch import nn
 
 import data2d
-from eval import acc, percent
 import train
+from eval import acc, percent
 
 
 def hinge_loss(outputs, margin):

@@ -11,14 +11,13 @@ import torch
 
 # from pycave.bayes import GaussianMixture
 from torch import linalg, nn
-from torch.nn.functional import softmax
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.nn.functional import softmax
 
 import data2d
 import train
 from cluster import cluster_var_pr_, kmeans_
 from eval import acc, percent, round_tensor
-
 
 """
 DetectorMixture is too slow with a large amount of data and isn't significantly more accurate than

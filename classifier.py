@@ -74,13 +74,13 @@ class CleverHansB(nn.Module):
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
         yield x
-        
+
         x = self.dropout1(x)
         x = torch.flatten(x, 1)
         x = self.fc1(x)
         x = F.relu(x)
         yield x
-        
+
         x = self.dropout2(x)
         x = self.fc2(x)
         x = F.log_softmax(x, dim=1)
@@ -143,10 +143,10 @@ class PoolNet(nn.Module):
 
     def activations(self, img_batch):
         """Yields activations of hidden layers before the output"""
-        
+
         for a0 in eval.activations_at(self.convs, img_batch, [3, -1]):
             yield a0
-        
+
         for a in eval.activations_at(self.fully_connected, a0, [2, -1]):
             yield a
 
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     data = mnist.load_data(n_train=20000, n_val=2000, device=device)
     net = CleverHansB().to(device)
     train.logistic_regression(net, data, init=True, verbose=True, lr=1e-3)
-    train.save(net, "chB20k")
+    train.save(net, "ChB20k")
 
     import eval
 

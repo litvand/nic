@@ -15,9 +15,7 @@ def batched_forward(net, X, batch_size):
 
 def batched_activations(net, X, batch_size):
     n_x = len(X)
-    batches = [
-        net.activations(X[i_x : i_x + batch_size]) for i_x in range(0, n_x, batch_size)
-    ]
+    batches = [net.activations(X[i_x : i_x + batch_size]) for i_x in range(0, n_x, batch_size)]
     X = None
 
     while True:
@@ -26,16 +24,16 @@ def batched_activations(net, X, batch_size):
             for i_batch, batch in enumerate(batches):
                 gc.collect()
                 activation = next(batch)
-                
+
                 # Concatenate batches in place
                 if i_batch == 0:
                     if len(batches) > 1:
                         assert len(activation) == batch_size, (len(activation), batch_size, n_x)
-                    
+
                     layer = torch.empty(
                         (n_x, *activation.size()[1:]),
                         dtype=activation.dtype,
-                        device=activation.device
+                        device=activation.device,
                     )
 
                 i_x = i_batch * batch_size
@@ -45,7 +43,7 @@ def batched_activations(net, X, batch_size):
         except StopIteration:
             # No batches left
             break
-        
+
         yield layer
 
 
@@ -61,7 +59,7 @@ def activations_at(sequential, X, module_indices):
         if i_module in module_indices or i_module - len(sequential) in module_indices:
             yield X
             n_yielded += 1
-    
+
     assert n_yielded == len(module_indices), (n_yielded, len(module_indices))
 
 

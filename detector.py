@@ -8,9 +8,9 @@ import classifier
 import eval
 import mnist
 import train
-from train import Normalize, Whiten
 from mixture import DetectorKmeans
 from nic import DetectorNIC
+from train import Normalize, Whiten
 
 
 def balanced_acc_threshold(train_outputs, is_positive_label):

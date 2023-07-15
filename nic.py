@@ -1,5 +1,5 @@
-import torch
 import sklearn
+import torch
 from torch import cuda, nn
 
 import adversary
@@ -9,7 +9,7 @@ import train
 from cache import TensorCache
 from eval import acc, batched_activations, percent, print_balanced_acc, print_multi_acc
 from mixture import DetectorKmeans
-from train import Normalize, Whiten, logistic_regression
+from train import Normalize, logistic_regression
 
 
 class SkSVM:
@@ -37,7 +37,7 @@ class SkSVM:
 
 
 def batched_whiten_fit(whiten, X, batch_size):
-    for i_x in range(0, len(X), batch_size):         
+    for i_x in range(0, len(X), batch_size):
         i_next = i_x + batch_size
         whiten.fit(X[i_x:i_next], finish=i_next >= len(X))
     return whiten
@@ -57,19 +57,15 @@ def cache_layers(whiten, X, trained_model, fit=False):
         a = a.flatten(1).to(X.device)
         if fit:
             batched_whiten_fit(whiten[i_layer], a, batch_size)
-        
+
         n_nan = a.sum(1).isnan().count_nonzero().item()
         if n_nan > 0:
-            print(
-                f"ERROR: layer {i_layer} before whiten, n_nan {n_nan}, numel {a.numel()}"
-            )
+            print(f"ERROR: layer {i_layer} before whiten, n_nan {n_nan}, numel {a.numel()}")
         whiten[i_layer](a, inplace=True)
-        
+
         n_nan = a.sum(1).isnan().count_nonzero().item()
         if n_nan > 0:
-            print(
-                f"ERROR: layer {i_layer} after whiten, n_nan {n_nan}, numel {a.numel()}"
-            )
+            print(f"ERROR: layer {i_layer} after whiten, n_nan {n_nan}, numel {a.numel()}")
         cache.append(a)
 
     return cache
@@ -154,12 +150,13 @@ class NIC(nn.Module):
         with torch.no_grad():
             layers = [X] + list(trained_model.activations(X))
             layers = [l.flatten(1) for l in layers]
-            self.whiten = nn.ModuleList([
+            self.whiten = nn.ModuleList(
+                [
                     # (Whiten if l.size(1) < 1000 else Normalize)(l[0]) for l in layers
-                    Normalize(l[0]) for l in layers
-            ])
-            # torch.save(self.whiten, "./tmp/w")
-            # self.whiten = None
+                    Normalize(l[0])
+                    for l in layers
+                ]
+            )
 
             k = detector_type == "kmeans"
             self.value_detectors = [] if detector_type == "svm" else nn.ModuleList()
@@ -167,10 +164,6 @@ class NIC(nn.Module):
                 self.value_detectors.append(
                     DetectorKmeans(l[0], n_centers) if k else SkSVM(n_centers)
                 )
-            # TODO: Allow multiple NIC instances
-            # if detector_type != "svm":
-                # torch.save(self.value_detectors, "./tmp/vd")
-                # self.value_detectors = None
 
             # Last layer already contains logits from trained model, so there's no need to use a
             # classifier. Last layer is also a transformation of the second-to-last layer, so it
@@ -180,8 +173,6 @@ class NIC(nn.Module):
             self.classifiers = nn.ModuleList(
                 [nn.Linear(l.size(1), n_classes).to(X.device) for l in layers[:-2]]
             )
-            # torch.save(self.classifiers, "./tmp/c")
-            # self.classifiers = None
 
             pair_example = torch.cat((logits, logits))
             self.prov_detectors = [] if detector_type == "svm" else nn.ModuleList()
@@ -189,9 +180,6 @@ class NIC(nn.Module):
                 self.prov_detectors.append(
                     DetectorKmeans(pair_example, n_centers) if k else SkSVM(n_centers)
                 )
-            # if detector_type != "svm":
-                # torch.save(self.prov_detectors, "./tmp/pd")
-                # self.prov_detectors = None
 
             densities = torch.zeros(1, dtype=X.dtype, device=X.device).expand(
                 len(layers) + len(layers[:-2])
@@ -247,6 +235,7 @@ class NIC(nn.Module):
 
         train_X_pos: Non-adversarial images
         train_X_neg: Adversarial images; can be `None` depending on final_type
+                     (Learning is unsupervised aside from optionally the final detector.)
         train_y: Class indices of images in train_X_pos
         trained_model: Model already trained to classify images in train_X_pos
         """
@@ -258,8 +247,10 @@ class NIC(nn.Module):
             layers = cache_layers(whiten, train_X_pos, trained_model, fit=True)
 
             print(f"whiten neg: {round(cuda.memory_allocated() / 1e9, 2)} GB")
-            layers_neg = None if self.final_type == "min" else cache_layers(
-                whiten, train_X_neg, trained_model
+            layers_neg = (
+                None
+                if self.final_type == "min"
+                else cache_layers(whiten, train_X_neg, trained_model)
             )
 
             if self.whiten is None:
@@ -355,21 +346,17 @@ if __name__ == "__main__":
 
     print("--- Model ---")
     trained_model = classifier.CleverHansA()
-    train.load(trained_model, "chA20k-0395d49193d8ccdf48b2d569f6ae8300612d4270")
+    train.load(trained_model, "ChA20k-0395d49193d8ccdf48b2d569f6ae8300612d4270")
     trained_model.to(device)
 
     print("--- Detector ---")
-    # train_X_neg = train_X_pos.clone()
-    # adversary.fgsm_(train_X_neg, train_y, trained_model, 0.3)
 
     n_centers = 1 + len(train_X_pos) // 100
-    detector = NIC(
-        train_X_pos[0], trained_model, n_centers, detector_type="kmeans", final_type="min"
-    )
+    detector = NIC(train_X_pos[0], trained_model, n_centers, detector_type="kmeans")
 
     # detector.fit(train_X_pos, train_y, trained_model)
-    # train.save(detector, f"nic{n_centers}-onchA20k")
-    train.load(detector, f"nic201-onchA20k-b6eab93ff6bd26e3262b5f124c8630c31ad6cc6f")
+    # train.save(detector, f"nic{n_centers}-onChA20k")
+    train.load(detector, f"nic201-onChA20k-b6eab93ff6bd26e3262b5f124c8630c31ad6cc6f")
 
     print("--- Validation ---")
     val_X_neg = val_X_pos.clone()
@@ -378,17 +365,15 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         train_a_pos = tuple(detector.activations(train_X_pos, trained_model))
-        # train_a_neg = tuple(detector.activations(train_X_neg, trained_model))
         val_a_pos = tuple(detector.activations(val_X_pos, trained_model))
         val_a_neg = tuple(detector.activations(val_X_neg, trained_model))
         print(
             "Index of first provenance detector:",
-            (len(train_a_pos) + 1) // 2 if len(train_a_pos) > 3 else None
+            (len(train_a_pos) + 1) // 2 if len(train_a_pos) > 3 else None,
         )
         for i_detector in range(len(train_a_pos)):
             print("i_detector", i_detector)
             print("train pos acc", percent(acc(train_a_pos[i_detector] >= 0.0)))
-            # print_balanced_acc(train_a_pos[i_detector], train_a_neg[i_detector], "Training")
             print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")
 
 """
