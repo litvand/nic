@@ -22,7 +22,6 @@ def batched_activations(net, X, batch_size):
         layer = None
         try:
             for i_batch, batch in enumerate(batches):
-                gc.collect()
                 activation = next(batch)
 
                 # Concatenate batches in place
@@ -52,8 +51,6 @@ def activations_at(sequential, X, module_indices):
 
     n_yielded = 0
     for i_module, module in enumerate(sequential):
-        gc.collect()
-
         X = module(X)
         # Support negative indices
         if i_module in module_indices or i_module - len(sequential) in module_indices:

@@ -1,3 +1,4 @@
+import foolbox as fb
 import sklearn
 import torch
 from torch import cuda, nn
@@ -363,10 +364,24 @@ if __name__ == "__main__":
     adversary.fgsm_(val_X_neg, val_y, trained_model, 0.3)
     print_multi_acc(trained_model(val_X_neg), val_y, "trained_model on val_X_neg")
 
+    val_X_fb, _, success = fb.attacks.FGSM()(
+        fb.PyTorchModel(trained_model, (-100.0, 100.0)),
+        val_X_pos,
+        fb.Misclassification(val_y),
+        epsilons=[0.3],
+    )
+    val_X_fb = val_X_fb[0]
+    print(
+        "trained_model acc on val_X_fb:",
+        percent(1.0 - success[0].count_nonzero() / float(len(success[0])))
+    )
+    print_multi_acc(trained_model(val_X_neg), val_y, "trained_model on val_X_fb")
+
     with torch.no_grad():
         train_a_pos = tuple(detector.activations(train_X_pos, trained_model))
         val_a_pos = tuple(detector.activations(val_X_pos, trained_model))
         val_a_neg = tuple(detector.activations(val_X_neg, trained_model))
+        val_a_fb = tuple(detector.activations(val_X_fb, trained_model))
         print(
             "Index of first provenance detector:",
             (len(train_a_pos) + 1) // 2 if len(train_a_pos) > 3 else None,
@@ -375,6 +390,7 @@ if __name__ == "__main__":
             print("i_detector", i_detector)
             print("train pos acc", percent(acc(train_a_pos[i_detector] >= 0.0)))
             print_balanced_acc(val_a_pos[i_detector], val_a_neg[i_detector], "Validation")
+            print_balanced_acc(val_a_pos[i_detector], val_a_fb[i_detector], "Validation")
 
 """
 fgsm(eps=0.2)
